@@ -10,13 +10,13 @@ Given a game, the assistant combines current and historical price data with back
 
 ## How it works
 
-| Component                  | Choice                                                                     |
-| -------------------------- | -------------------------------------------------------------------------- |
-| LLM                        | Llama 3.1 8B, run locally through [Ollama](https://ollama.com)             |
-| Price data                 | [IsThereAnyDeal](https://isthereanydeal.com) API                           |
-| Game and company knowledge | Steam Store API and Wikipedia, stored as Markdown files                    |
-| Retrieval (RAG)            | A vector library built by this project from the game and company overviews |
-| Tooling                    | Python 3.12, [uv](https://docs.astral.sh/uv/)                              |
+| Component                  | Choice                                                                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| LLM                        | Llama 3.1 8B, run locally through [Ollama](https://ollama.com)                                                                                 |
+| Price data                 | [IsThereAnyDeal](https://isthereanydeal.com) API                                                                                               |
+| Game and company knowledge | Steam Store API and Wikipedia, stored as Markdown files                                                                                        |
+| Retrieval (RAG)            | [Chroma](https://www.trychroma.com) vector store built from the game and company overviews, embedded with `all-MiniLM-L6-v2` through LangChain |
+| Tooling                    | Python 3.12, [uv](https://docs.astral.sh/uv/)                                                                                                  |
 
 The vector library gives the LLM context a price history can't: a game's genre, release date, reviews and publisher, plus the studio's track record. That context is meant to make price predictions, and the estimated time until a price hits your target, more accurate than looking at prices alone.
 
@@ -25,7 +25,7 @@ The vector library gives the LLM context a price history can't: a game's genre, 
 | Stage                                                            | State   |
 | ---------------------------------------------------------------- | ------- |
 | Knowledge base builder (game and company overviews to Markdown)  | Done    |
-| Vector library (RAG) over the knowledge base                     | Planned |
+| Vector library (RAG) over the knowledge base                     | Done    |
 | Price data from IsThereAnyDeal                                   | Planned |
 | Buy-or-wait recommendations and target-price prediction          | Planned |
 | Python ML service (RAG + Llama 3.1) exposed over HTTP            | Planned |
@@ -111,6 +111,20 @@ Notes:
 uv run python -m kb_builder.build "Hollow Knight" "Dota 2"
 ```
 
+## Building the vector store
+
+[RAG/assistant.py](RAG/assistant.py) turns the knowledge base into a Chroma vector store saved in `RAG/db/` (git-ignored).
+
+```bash
+uv run python RAG/assistant.py
+```
+
+- Game and company files are split into chunks of about 1,000 characters with 200 characters of overlap. Each chunk is prefixed with "Game Overview: <name>" or "Company Overview: <name>".
+- Every chunk has `name`, `doc_type` (`game` or `company`) and `source` metadata, so searches can be limited to one type.
+- Company stub files (studios with no Wikipedia article) are skipped because they contain only a name.
+- The store is deleted and rebuilt on every run, so re-running never duplicates chunks. Re-run it after adding games to the knowledge base.
+- The first run downloads the embedding model from Hugging Face.
+
 ## Project layout
 
 ```
@@ -121,6 +135,9 @@ kb_builder/
 ├── wikipedia.py    company lookup via the Wikipedia API
 ├── common.py       paths, throttled HTTP client, helpers
 └── data/genre_tags.json
+RAG/
+├── assistant.py    builds the Chroma vector store
+└── db/             generated vector store (git-ignored)
 config.toml         batch job settings
 main.py             Ollama smoke test
 ```
