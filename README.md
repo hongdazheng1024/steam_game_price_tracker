@@ -22,12 +22,38 @@ The vector library gives the LLM context a price history can't: a game's genre, 
 
 ## Status
 
-| Stage                                                           | State   |
-| --------------------------------------------------------------- | ------- |
-| Knowledge base builder (game and company overviews to Markdown) | Done    |
-| Vector library (RAG) over the knowledge base                    | Planned |
-| Price data from IsThereAnyDeal                                  | Planned |
-| Buy-or-wait recommendations and target-price prediction         | Planned |
+| Stage                                                            | State   |
+| ---------------------------------------------------------------- | ------- |
+| Knowledge base builder (game and company overviews to Markdown)  | Done    |
+| Vector library (RAG) over the knowledge base                     | Planned |
+| Price data from IsThereAnyDeal                                   | Planned |
+| Buy-or-wait recommendations and target-price prediction          | Planned |
+| Python ML service (RAG + Llama 3.1) exposed over HTTP            | Planned |
+| Spring Boot backend (users, preferences, track list, price jobs) | Planned |
+| Next.js chat frontend                                            | Planned |
+
+## Planned architecture
+
+The frontend and backend are built after the ML pieces above.
+
+| Layer      | Technology        | Responsibility                                                                                                                                                                               |
+| ---------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend   | Next.js           | Chat interface, user preferences, game track list                                                                                                                                            |
+| Backend    | Java, Spring Boot | Authentication, stored chat history, preferences and track list, scheduled price checks and target-price alerts, API for the frontend                                                        |
+| ML service | Python            | Runs retrieval over the vector library, lets Llama 3.1 call the IsThereAnyDeal price tool (with a local cache to avoid repeat API calls), summarizes the price history and returns an answer |
+
+```
+Next.js ── new message + conversation id ──▶ Spring Boot ──▶ Python ML service
+                                              loads history,        RAG retrieval
+                                              preferences and       + Llama 3.1
+                                              tracked games         (via Ollama)
+Next.js ◀────────── streamed reply ──────── Spring Boot ◀────────── streamed reply
+```
+
+- The frontend sends only the new message. Spring Boot owns the stored history and preferences and passes them to the ML service with each request.
+- The ML service keeps no user state. Its only storage is a cache of price data, which keeps it easy to test and replace.
+- Replies are streamed back to the browser, because a local 8B model is slow.
+- Target-price alerts run on a schedule in Spring Boot, separate from chat.
 
 ## Setup
 
