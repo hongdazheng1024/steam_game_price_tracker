@@ -1,0 +1,9 @@
+# "test" writes to knowledge-base-test/ (and defaults to 5 games per genre if `amount` is unset).
+# "prod"  writes to knowledge-base/ (and processes every game if `amount` is unset).
+mode = "prod"
+
+# Optional. Genres to process; omit to process every genre in kb_builder/data/genre_tags.json.
+genres = ["Action", "RPG", "Adventure", "Casual", "Indie", "Massively Multiplayer", "Racing", "Simulation", "Sports", "Strategy"]
+
+# Optional. Max games to process per genre; omit for the mode's default.
+amount = 10

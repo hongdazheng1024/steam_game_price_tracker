@@ -1,0 +1,11 @@
+# Fuse (video game)
+
+- **Wikipedia page:** https://en.wikipedia.org/wiki/Fuse_(video_game)
+- **Description:** 2013 video game
+
+## Overview
+
+Fuse is a four-player cooperative third-person shooter video game developed by Insomniac Games and published by Electronic Arts for PlayStation 3 and Xbox 360. The game was announced as Overstrike before it was rebranded in August 2012. It was released on May 28, 2013 in North America, May 30, 2013 in Australia and on May 31, 2013 in Europe. Fuse was both a critical and commercial failure for Electronic Arts.
+
+---
+*Source: Wikipedia REST API, fetched 2026-10-02*
