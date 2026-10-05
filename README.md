@@ -150,7 +150,37 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
    MODEL_API_KEY=ollama
    ```
 
-4. Create the database by running the first two cells of [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb). The third cell adds a sample game and is optional. Running `init_db()` again drops the table and clears the cache.
+4. Create the database (see [Database setup](#database-setup)).
+
+### Database setup
+
+[agent/steam_price_db_init.py](agent/steam_price_db_init.py) creates the SQLite database `steam_game_price.db` in the directory you run it from. Run it from `agent/`:
+
+```bash
+cd agent
+uv run python steam_price_db_init.py
+```
+
+It creates two tables:
+
+| Table          | Contents                                                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `game_library` | Cached price data (current deal and all-time low) per game and country, with the time it was fetched.                                                       |
+| `game_catalog` | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Not used by the agent yet; see below. |
+
+Running the script again is safe: tables are only created if they don't exist, so cached data is kept. This also means schema changes don't apply to an existing database unless you drop the tables first.
+
+Settings in [agent/db_config.toml](agent/db_config.toml):
+
+| Field                  | Required | Description                                                                                                                                                                      |
+| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `force_to_drop_tables` | No       | `true` drops `game_library` and `game_catalog` before recreating them, deleting all cached data. Use it after a schema change, then set it back to `false`. Defaults to `false`. |
+
+The script stops with an error if the config file is missing or `force_to_drop_tables` isn't `true` or `false`.
+
+`game_catalog` is the first step toward skipping the IsThereAnyDeal search call for known games. The plan is to look up a game's id from this table instead of calling the API each time. Search results get stored here, and the user picks the right game from a dropdown in the UI when a name matches more than one title.
+
+The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`, in `steam_tracker.db`. It drops the table on every run and can add a sample game.
 
 ### Running
 
@@ -182,7 +212,9 @@ kb_builder/
 └── data/genre_tags.json
 agent/
 ├── steam_price_tracker.ipynb   price tool, Llama 3.1 agent and Gradio chat UI
-└── steam_price_db_init.ipynb   creates the SQLite price cache
+├── steam_price_db_init.py      creates the SQLite price cache and game catalog
+├── db_config.toml              database init settings
+└── steam_price_db_init.ipynb   older notebook version of the database init, with sample data
 RAG/
 ├── chunking.py     reads the knowledge base and splits it into chunks
 ├── data_load.py    builds/opens the Chroma vector store and exposes retrieval

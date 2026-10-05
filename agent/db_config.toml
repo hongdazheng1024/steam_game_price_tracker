@@ -1,0 +1,5 @@
+# Settings for steam_price_db_init.py.
+
+# true drops game_library and game_catalog before recreating them, deleting all cached prices and
+# title-to-id mappings. Use it after changing a table schema; set it back to false afterwards.
+force_to_drop_tables = false
