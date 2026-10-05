@@ -111,18 +111,20 @@ Notes:
 uv run python -m kb_builder.build "Hollow Knight" "Dota 2"
 ```
 
-## Building the vector store
+## Vector store and retrieval
 
-[RAG/assistant.py](RAG/assistant.py) turns the knowledge base into a Chroma vector store saved in `RAG/db/` (git-ignored).
+[RAG/data_load.py](RAG/data_load.py) loads the knowledge base into a Chroma vector store saved in `RAG/db/` (git-ignored) and exposes retrieval. It runs once, when the module is first imported (for example at server start-up), and it can also be run directly to build or refresh the store:
 
 ```bash
-uv run python RAG/assistant.py
+uv run python RAG/data_load.py                  # reuse the store if it is up to date
+RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 ```
 
 - Game and company files are split into chunks of about 1,000 characters with 200 characters of overlap. Each chunk is prefixed with "Game Overview: <name>" or "Company Overview: <name>".
-- Every chunk has `name`, `doc_type` (`game` or `company`) and `source` metadata, so searches can be limited to one type.
+- Every chunk has `name`, `doc_type` (`game` or `company`) and `source` metadata.
 - Company stub files (studios with no Wikipedia article) are skipped because they contain only a name.
-- The store is deleted and rebuilt on every run, so re-running never duplicates chunks. Re-run it after adding games to the knowledge base.
+- On start-up the existing store is reused when its chunk count matches the knowledge base. Otherwise it is rebuilt, so adding games triggers a rebuild automatically. Edits to existing files that don't change the chunk count need `RAG_REBUILD=1`.
+- `retrieve_from_vectorstore(query)` returns the 4 most relevant chunks. It uses MMR to avoid several near-identical chunks from one game, then orders them for the LLM context.
 - The first run downloads the embedding model from Hugging Face.
 
 ## Project layout
@@ -136,7 +138,7 @@ kb_builder/
 ├── common.py       paths, throttled HTTP client, helpers
 └── data/genre_tags.json
 RAG/
-├── assistant.py    builds the Chroma vector store
+├── data_load.py    builds/opens the Chroma vector store and exposes retrieval
 └── db/             generated vector store (git-ignored)
 config.toml         batch job settings
 main.py             Ollama smoke test
