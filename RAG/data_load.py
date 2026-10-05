@@ -104,7 +104,3 @@ def retrieve_from_vectorstore(query: str) -> list[str]:
     # Reorder only after selecting the top chunks, so the best ones are never cut.
     ordered_docs = LongContextReorder().transform_documents(docs)
     return [doc.page_content for doc in ordered_docs]
-
-
-query = "what is the overview of Street Fighter 6"
-print(retrieve_from_vectorstore(query))
