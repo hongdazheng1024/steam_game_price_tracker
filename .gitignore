@@ -13,3 +13,4 @@ wheels/
 knowledge-base-test/
 RAG/db/
 .DS_Store
+steam_tracker.db
