@@ -28,8 +28,10 @@ The vector library gives the LLM context a price history can't: a game's genre, 
 | ---------------------------------------------------------------- | ------- |
 | Knowledge base builder (game and company overviews to Markdown)  | Done    |
 | Vector library (RAG) over the knowledge base                     | Done    |
-| Price data from IsThereAnyDeal                                   | Planned |
-| Buy-or-wait recommendations and target-price prediction          | Planned |
+| Price data from IsThereAnyDeal (cached in SQLite)                | Done    |
+| Price-tracking agent (Llama 3.1 tool calling, Gradio chat UI)    | Done    |
+| Buy-or-wait recommendations                                      | Done    |
+| Target-price prediction (price history + RAG context)            | Planned |
 | Python ML service (RAG + Llama 3.1) exposed over HTTP            | Planned |
 | Spring Boot backend (users, preferences, track list, price jobs) | Planned |
 | Next.js chat frontend                                            | Planned |
@@ -129,6 +131,37 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 - `retrieve_from_vectorstore(query)` returns the 4 most relevant chunks. It uses MMR to avoid several near-identical chunks from one game, then orders them for the LLM context.
 - The first run downloads the embedding model from Hugging Face.
 
+## Price-tracking agent
+
+[agent/steam_price_tracker.ipynb](agent/steam_price_tracker.ipynb) is a chat assistant for Steam game prices. Ask about a game and Llama 3.1 calls a tool that looks it up on IsThereAnyDeal, then compares the current deal with the regular price and the all-time low and says whether to buy now or wait.
+
+- Prices are cached in a local SQLite database (`agent/steam_tracker.db`, git-ignored) for 24 hours per game and country, so repeat questions don't call the API again.
+- The country (US, JP, GB, CA, AU, DE, FR) is picked in the UI.
+- The model only calls the tool when you name a specific game. Greetings and vague questions get a normal reply.
+
+### Prerequisites
+
+1. Get an API key from [IsThereAnyDeal](https://isthereanydeal.com/apps/my/).
+2. Make sure Ollama is running and `llama3.1` is pulled (see [Setup](#setup)).
+3. Add both keys to a `.env` file in the repo root. Ollama doesn't check the model key, but it must be set:
+
+   ```
+   ITAD-API-KEY=your-isthereanydeal-key
+   MODEL_API_KEY=ollama
+   ```
+
+4. Create the database by running the first two cells of [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb). The third cell adds a sample game and is optional. Running `init_db()` again drops the table and clears the cache.
+
+### Running
+
+Open [agent/steam_price_tracker.ipynb](agent/steam_price_tracker.ipynb) with the project's `.venv` as the kernel (for example in VS Code), or start Jupyter with:
+
+```bash
+uv run --with jupyter jupyter lab
+```
+
+Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860 by default.
+
 ## Tests
 
 ```bash
@@ -147,6 +180,9 @@ kb_builder/
 ├── wikipedia.py    company lookup via the Wikipedia API
 ├── common.py       paths, throttled HTTP client, helpers
 └── data/genre_tags.json
+agent/
+├── steam_price_tracker.ipynb   price tool, Llama 3.1 agent and Gradio chat UI
+└── steam_price_db_init.ipynb   creates the SQLite price cache
 RAG/
 ├── chunking.py     reads the knowledge base and splits it into chunks
 ├── data_load.py    builds/opens the Chroma vector store and exposes retrieval
