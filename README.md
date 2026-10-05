@@ -1,5 +1,7 @@
 # Steam Game Price Tracker
 
+[![Tests](https://github.com/hongdazheng1024/steam_game_price_tracker/actions/workflows/tests.yml/badge.svg)](https://github.com/hongdazheng1024/steam_game_price_tracker/actions/workflows/tests.yml)
+
 An LLM-powered assistant that helps you decide whether a Steam game is worth buying, and when to buy it.
 
 Given a game, the assistant combines current and historical price data with background knowledge about the game and its developer/publisher to answer questions like:
@@ -127,6 +129,14 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 - `retrieve_from_vectorstore(query)` returns the 4 most relevant chunks. It uses MMR to avoid several near-identical chunks from one game, then orders them for the LLM context.
 - The first run downloads the embedding model from Hugging Face.
 
+## Tests
+
+```bash
+uv run pytest
+```
+
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out) and knowledge-base chunking. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+
 ## Project layout
 
 ```
@@ -138,8 +148,11 @@ kb_builder/
 ├── common.py       paths, throttled HTTP client, helpers
 └── data/genre_tags.json
 RAG/
+├── chunking.py     reads the knowledge base and splits it into chunks
 ├── data_load.py    builds/opens the Chroma vector store and exposes retrieval
 └── db/             generated vector store (git-ignored)
+tests/              pytest suite
+.github/workflows/  CI that runs the tests on every push
 config.toml         batch job settings
 main.py             Ollama smoke test
 ```

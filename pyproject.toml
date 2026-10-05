@@ -18,3 +18,21 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "sentence-transformers>=6.1.0",
 ]
+
+# Kept small on purpose: the tests need none of the ML stack, so CI installs only this group.
+[dependency-groups]
+dev = [
+    "httpx",
+    "langchain-core>=1.6.6",
+    "langchain-text-splitters>=1.1.3",
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# RAG/ is on the path because data_load.py runs as a script and imports chunking directly.
+pythonpath = [".", "RAG"]
+
+# Same extra path for the editor (Pylance/Pyright), so `import chunking` resolves in tests/.
+[tool.pyright]
+extraPaths = ["RAG"]

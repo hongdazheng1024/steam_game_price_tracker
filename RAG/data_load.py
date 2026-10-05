@@ -6,12 +6,11 @@ from langchain_community.document_transformers import LongContextReorder
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from chunking import load_chunks
 
 NOTEBOOK_DIR = Path(os.path.abspath(__file__)).parent
 
-COMPANIES_DIR = NOTEBOOK_DIR.parent / "knowledge-base" / "companies"
-GAMES_DIR = NOTEBOOK_DIR.parent / "knowledge-base" / "games"
 DB_DIR = NOTEBOOK_DIR / "db"
 
 # Retrieval config
@@ -23,38 +22,6 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Set RAG_REBUILD=1 to force re-embedding even when the stored chunk count matches.
 FORCE_REBUILD = os.environ.get("RAG_REBUILD") == "1"
-
-NO_ARTICLE_MARKER = "No Wikipedia article was found"
-
-
-def load_chunks() -> list[Document]:
-    """Read the knowledge base and split it into chunks. Fast and needs no model."""
-    raw_docs = []
-    skipped_stubs = 0
-    for doc_type, directory in (("game", GAMES_DIR), ("company", COMPANIES_DIR)):
-        for filepath in directory.glob("**/*.md"):
-            text = filepath.read_text(encoding="utf-8")
-            if doc_type == "company" and NO_ARTICLE_MARKER in text:
-                skipped_stubs += 1
-                continue
-            raw_docs.append(Document(page_content=text, metadata={
-                            "name": filepath.stem, "doc_type": doc_type, "source": str(filepath)}))
-
-    print(
-        f"Loaded {len(raw_docs)} documents ({skipped_stubs} company stubs skipped)")
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000, chunk_overlap=200)
-    chunks = []
-    for chunk in splitter.split_documents(raw_docs):
-        name = chunk.metadata["name"]
-        label = "Game" if chunk.metadata["doc_type"] == "game" else "Company"
-        enhanced_content = f"{label} Overview: {name}\n\n{chunk.page_content}"
-        chunks.append(Document(page_content=enhanced_content,
-                      metadata=chunk.metadata))
-
-    print(f"Created {len(chunks)} enhanced chunks")
-    return chunks
 
 
 def open_or_build_vectorstore(chunks: list[Document], embeddings, force_rebuild: bool = False) -> Chroma:
