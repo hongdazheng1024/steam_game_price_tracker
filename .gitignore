@@ -12,3 +12,4 @@ wheels/
 .venv
 knowledge-base-test/
 RAG/db/
+.DS_Store
