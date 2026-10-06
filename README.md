@@ -133,11 +133,24 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 
 ## Price-tracking agent
 
-[agent/steam_price_tracker.ipynb](agent/steam_price_tracker.ipynb) is a chat assistant for Steam game prices. Ask about a game and Llama 3.1 calls a tool that looks it up on IsThereAnyDeal, then compares the current deal with the regular price and the all-time low and says whether to buy now or wait.
+[agent/steam_price_tracker.ipynb](agent/steam_price_tracker.ipynb) is a chat assistant for Steam game prices. Ask about a game and Llama 3.1 calls the `search_game` tool to find it on IsThereAnyDeal, then compares the current deal with the regular price and the all-time low and says whether to buy now or wait.
 
-- Prices are cached in a local SQLite database (`agent/steam_tracker.db`, git-ignored) for 24 hours per game and country, so repeat questions don't call the API again.
-- The country (US, JP, GB, CA, AU, DE, FR) is picked in the UI.
 - The model only calls the tool when you name a specific game. Greetings and vague questions get a normal reply.
+- The country (US, JP, GB, CA, AU, DE, FR) is picked in the UI.
+- Both lookups are cached in a local SQLite database (`agent/steam_tracker.db`, git-ignored), so repeat questions make fewer API calls, or none.
+
+### Finding the game
+
+`search_game` turns the title you typed into an IsThereAnyDeal game id before fetching prices:
+
+1. It normalizes the title (lowercase, punctuation removed), so "clair obscur expedition 33" matches "Clair Obscur: Expedition 33".
+2. It checks the local `game_catalog` table. One exact title match goes straight to the price, with no API search.
+3. Titles that only contain your query, or several games with the same title, are returned as a list to choose from.
+4. With no local match, it calls the IsThereAnyDeal search API and stores every result in `game_catalog`. One exact match among the results goes straight to the price; otherwise the results are returned as a list.
+
+When there's a list, the assistant shows the titles and asks which one you mean. Reply with the title as shown, and it looks up that game's price. Prices are then cached for 24 hours per game and country, so asking about the same game again needs no API calls at all.
+
+`search_game` can also skip the local catalog and search online (`search_online=True`), for when none of the catalog's matches is the right game. The chat doesn't offer this yet; a dropdown for choosing the game, with a "None of these" option, is planned.
 
 ### Prerequisites
 
@@ -154,7 +167,7 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 
 ### Database setup
 
-[agent/steam_price_db_init.py](agent/steam_price_db_init.py) creates the SQLite database `steam_game_price.db` in the directory you run it from. Run it from `agent/`:
+[agent/steam_price_db_init.py](agent/steam_price_db_init.py) creates the SQLite database `steam_tracker.db` (git-ignored) in the directory you run it from. Run it from `agent/`:
 
 ```bash
 cd agent
@@ -166,9 +179,9 @@ It creates two tables:
 | Table          | Contents                                                                                                                                                    |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `game_library` | Cached price data (current deal and all-time low) per game and country, with the time it was fetched.                                                       |
-| `game_catalog` | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Not used by the agent yet; see below. |
+| `game_catalog` | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results.            |
 
-Running the script again is safe: tables are only created if they don't exist, so cached data is kept. This also means schema changes don't apply to an existing database unless you drop the tables first.
+Running the script again is safe: tables are only created if they don't exist, so cached data is kept. If you already have a `steam_tracker.db` from before `game_catalog` existed, run the script once to add it. This also means schema changes don't apply to an existing database unless you drop the tables first.
 
 Settings in [agent/db_config.toml](agent/db_config.toml):
 
@@ -178,9 +191,7 @@ Settings in [agent/db_config.toml](agent/db_config.toml):
 
 The script stops with an error if the config file is missing or `force_to_drop_tables` isn't `true` or `false`.
 
-`game_catalog` is the first step toward skipping the IsThereAnyDeal search call for known games. The plan is to look up a game's id from this table instead of calling the API each time. Search results get stored here, and the user picks the right game from a dropdown in the UI when a name matches more than one title.
-
-The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`, in `steam_tracker.db`. It drops the table on every run and can add a sample game.
+The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`. It drops the table on every run and can add a sample game.
 
 ### Running
 
