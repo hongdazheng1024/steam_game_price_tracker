@@ -3,7 +3,7 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
-DB_FILE = "steam_game_price.db"
+DB_FILE = "steam_tracker.db"
 CONFIG_PATH = Path(__file__).parent / "db_config.toml"
 
 
