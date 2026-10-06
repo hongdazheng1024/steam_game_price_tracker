@@ -148,9 +148,14 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 3. Titles that only contain your query, or several games with the same title, are returned as a list to choose from.
 4. With no local match, it calls the IsThereAnyDeal search API and stores every result in `game_catalog`. One exact match among the results goes straight to the price; otherwise the results are returned as a list.
 
-When there's a list, the assistant shows the titles and asks which one you mean. Reply with the title as shown, and it looks up that game's price. Prices are then cached for 24 hours per game and country, so asking about the same game again needs no API calls at all.
+When there's a list, the assistant asks which one you mean and shows each game as a button under its message (Gradio chatbot options). Click one, and it looks up that game's price and summarizes it:
 
-`search_game` can also skip the local catalog and search online (`search_online=True`), for when none of the catalog's matches is the right game. The chat doesn't offer this yet; a dropdown for choosing the game, with a "None of these" option, is planned.
+- Each button holds the game's id, so two games with the same title can't be mixed up. Repeated titles are numbered, like "Prey (1)" and "Prey (2)".
+- When the list came from the local catalog, a "None of these, search online" button is added. The catalog only holds games from earlier searches, so this runs the IsThereAnyDeal search (`search_game` with `search_online=True`) and shows its results instead.
+- The list is written by the code, not the model, so it always matches the choices `search_game` returned.
+- Only the latest list's buttons stay clickable. You can also type a game's title instead of clicking.
+
+Prices are then cached for 24 hours per game and country, so asking about the same game again needs no API calls at all.
 
 ### Prerequisites
 
