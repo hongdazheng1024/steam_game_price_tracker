@@ -125,11 +125,35 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 ```
 
 - Game and company files are split into chunks of about 1,000 characters with 200 characters of overlap. Each chunk is prefixed with "Game Overview: <name>" or "Company Overview: <name>".
-- Every chunk has `name`, `doc_type` (`game` or `company`) and `source` metadata.
+- Every chunk has `name`, `doc_type` (`game` or `company`), `source` and `schema_version` metadata.
+- Game chunks also carry `title`, `steam_appid`, `developers` and `publishers`, read from the game file's header. Only the first chunk contains the header, so these are copied onto every chunk of the game. Fields missing from the file are left out.
 - Company stub files (studios with no Wikipedia article) are skipped because they contain only a name.
-- On start-up the existing store is reused when its chunk count matches the knowledge base. Otherwise it is rebuilt, so adding games triggers a rebuild automatically. Edits to existing files that don't change the chunk count need `RAG_REBUILD=1`.
+- On start-up the existing store is reused when its chunk count and `schema_version` match the knowledge base. Otherwise it is rebuilt, so adding games or changing the chunk metadata (bump `SCHEMA_VERSION` in [chunking.py](RAG/chunking.py)) triggers a rebuild automatically. Edits to existing files that don't change the chunk count need `RAG_REBUILD=1`.
 - `retrieve_from_vectorstore(query)` returns the 4 most relevant chunks. It uses MMR to avoid several near-identical chunks from one game, then orders them for the LLM context.
 - The first run downloads the embedding model from Hugging Face.
+
+### Finding games from a description
+
+`find_game_candidates(query)` finds the games a user may mean when they describe a game instead of naming it, like "the new Capcom samurai game" or "FromSoftware's souls game". It returns up to 5 games, best first, each as `{"name", "title", "steam_appid"}`, or an empty list when nothing matches well enough (the user should then be asked for the exact title).
+
+- If the query names a developer or publisher, only that company's games are ranked. Embeddings match company names poorly (Elden Ring ranked below unrelated games for "FromSoftware souls game"), so the company match comes from the game headers instead.
+  - Company names are compared without case, punctuation or corporate suffixes, so "Capcom" matches "CAPCOM Co., Ltd.". They must match as whole words.
+  - Commas that belong to a name are handled: "FromSoftware, Inc., Bandai Namco Entertainment" is two companies.
+  - There are no aliases yet, so "EA" doesn't match "Electronic Arts".
+- Otherwise every game is ranked, and company files are left out.
+- Each game is scored by its best-matching chunk (relevance from about -0.2 for unrelated text to 0.6 for a clear match). Without a company match, nothing is returned when the best game scores under 0.2. Games more than 0.15 behind the best one are dropped.
+- The thresholds are set in [data_load.py](RAG/data_load.py) (`MIN_CANDIDATE_SCORE`, `MAX_CANDIDATE_GAP`, `MAX_CANDIDATES`). The matching and ranking logic is in [candidates.py](RAG/candidates.py), which needs no ML stack, so it is unit-tested.
+
+| Query                       | Candidates                                                                  |
+| --------------------------- | --------------------------------------------------------------------------- |
+| the new Capcom samurai game | Onimusha: Way of the Sword                                                  |
+| that Pragmata thing         | PRAGMATA                                                                    |
+| Capcom fighting game        | Street Fighter V, Street Fighter 6                                          |
+| FromSoftware souls game     | ELDEN RING                                                                  |
+| Ubisoft's pirate game       | Ubisoft's games in the knowledge base (Skull and Bones isn't in it yet)     |
+| best pizza recipe           | none                                                                        |
+
+The agent doesn't call this yet. The next step is mapping each candidate's Steam App ID to its IsThereAnyDeal id and showing the candidates as buttons, the same way `search_game` shows its choices.
 
 ## Price-tracking agent
 
@@ -214,7 +238,7 @@ Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out) and knowledge-base chunking. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata) and the company matching and ranking behind `find_game_candidates`. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
 
 ## Project layout
 
@@ -232,8 +256,9 @@ agent/
 ├── db_config.toml              database init settings
 └── steam_price_db_init.ipynb   older notebook version of the database init, with sample data
 RAG/
-├── chunking.py     reads the knowledge base and splits it into chunks
-├── data_load.py    builds/opens the Chroma vector store and exposes retrieval
+├── chunking.py     reads the knowledge base and splits it into chunks, with game header metadata
+├── candidates.py   company matching and ranking for find_game_candidates (no ML dependencies)
+├── data_load.py    builds/opens the Chroma vector store and exposes retrieval and find_game_candidates
 └── db/             generated vector store (git-ignored)
 tests/              pytest suite
 .github/workflows/  CI that runs the tests on every push

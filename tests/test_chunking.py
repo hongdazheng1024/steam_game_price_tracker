@@ -1,6 +1,6 @@
 import pytest
 
-from chunking import CHUNK_OVERLAP, CHUNK_SIZE, NO_ARTICLE_MARKER, load_chunks
+from chunking import CHUNK_OVERLAP, CHUNK_SIZE, NO_ARTICLE_MARKER, SCHEMA_VERSION, load_chunks, parse_game_header
 
 
 @pytest.fixture
@@ -63,3 +63,46 @@ def test_nested_directories_are_included(kb):
     (games / "sub").mkdir()
     (games / "sub" / "nested.md").write_text("Nested game.", encoding="utf-8")
     assert [c.metadata["name"] for c in load_chunks(games, companies)] == ["nested"]
+
+
+GAME_HEADER = """# ELDEN RING
+
+- **Steam App ID:** 1245620
+- **Developers:** FromSoftware, Inc.
+- **Publishers:** FromSoftware, Inc., Bandai Namco Entertainment
+- **Genres:** Action, RPG
+
+## About the game
+
+- **Publishers:** not a header field
+"""
+
+
+def test_game_header_is_parsed():
+    assert parse_game_header(GAME_HEADER) == {
+        "title": "ELDEN RING",
+        "steam_appid": 1245620,
+        "developers": "FromSoftware, Inc.",
+        "publishers": "FromSoftware, Inc., Bandai Namco Entertainment",
+    }
+
+
+def test_missing_header_fields_are_left_out():
+    assert parse_game_header("# Odd\n\n- **Steam App ID:** N/A\n") == {"title": "Odd"}
+
+
+def test_game_header_is_copied_to_every_chunk(kb):
+    games, companies = kb
+    body = " ".join(f"word{i}" for i in range(800))
+    (games / "elden-ring.md").write_text(GAME_HEADER + body, encoding="utf-8")
+    (companies / "fromsoftware.md").write_text("# FromSoftware\n\n- **Publishers:** x", encoding="utf-8")
+
+    chunks = load_chunks(games, companies)
+    game_chunks = [c for c in chunks if c.metadata["doc_type"] == "game"]
+    company_chunk = next(c for c in chunks if c.metadata["doc_type"] == "company")
+
+    assert len(game_chunks) > 1
+    assert all(c.metadata["steam_appid"] == 1245620 for c in game_chunks)
+    assert all(c.metadata["title"] == "ELDEN RING" for c in game_chunks)
+    assert "publishers" not in company_chunk.metadata
+    assert all(c.metadata["schema_version"] == SCHEMA_VERSION for c in chunks)
