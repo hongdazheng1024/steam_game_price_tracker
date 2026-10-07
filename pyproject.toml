@@ -32,9 +32,9 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# RAG/ is on the path because data_load.py runs as a script and imports chunking directly.
-pythonpath = [".", "RAG"]
+# RAG/ and agent/ are on the path because their modules run as scripts and are imported directly.
+pythonpath = [".", "RAG", "agent"]
 
 # Same extra path for the editor (Pylance/Pyright), so `import chunking` resolves in tests/.
 [tool.pyright]
-extraPaths = ["RAG"]
+extraPaths = ["RAG", "agent"]
