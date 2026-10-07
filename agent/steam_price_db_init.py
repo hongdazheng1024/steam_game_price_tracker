@@ -18,6 +18,13 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     return {"force_to_drop_tables": force_to_drop_tables}
 
 
+def add_missing_columns(cursor):
+    # CREATE TABLE IF NOT EXISTS leaves an existing table as it was, so add columns added since
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(game_catalog)")}
+    if "steam_appid" not in columns:
+        cursor.execute("ALTER TABLE game_catalog ADD COLUMN steam_appid INTEGER")
+
+
 def init_db(force_to_drop_tables: bool = False):
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
@@ -36,16 +43,23 @@ def init_db(force_to_drop_tables: bool = False):
             );
         """)
         # ITAD search results: maps official title to game id so later lookups can skip the search API.
+        # steam_appid is set for games found through the knowledge base (find_game_candidates);
+        # ITAD search results don't include it.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS game_catalog (
                 id TEXT PRIMARY KEY,
                 official_title TEXT NOT NULL,
                 normalized_title TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                steam_appid INTEGER
             );
         """)
+        add_missing_columns(cursor)
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_game_catalog_normalized_title ON game_catalog (normalized_title)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_game_catalog_steam_appid ON game_catalog (steam_appid)"
         )
         conn.commit()
 

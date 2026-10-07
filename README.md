@@ -153,13 +153,14 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 | Ubisoft's pirate game       | Ubisoft's games in the knowledge base (Skull and Bones isn't in it yet)     |
 | best pizza recipe           | none                                                                        |
 
-The agent doesn't call this yet. The next step is mapping each candidate's Steam App ID to its IsThereAnyDeal id and showing the candidates as buttons, the same way `search_game` shows its choices.
+The price-tracking agent calls it through its `find_game_candidates` tool (see [Finding a game from a description](#finding-a-game-from-a-description)).
 
 ## Price-tracking agent
 
-[agent/steam_price_tracker.ipynb](agent/steam_price_tracker.ipynb) is a chat assistant for Steam game prices. Ask about a game and Llama 3.1 calls the `search_game` tool to find it on IsThereAnyDeal, then compares the current deal with the regular price and the all-time low and says whether to buy now or wait.
+[agent/steam_price_tracker.ipynb](agent/steam_price_tracker.ipynb) is a chat assistant for Steam game prices. Ask about a game and Llama 3.1 finds it on IsThereAnyDeal, then compares the current deal with the regular price and the all-time low and says whether to buy now or wait.
 
-- The model only calls the tool when you name a specific game. Greetings and vague questions get a normal reply.
+- The model has two tools: `search_game` when you name a game (even a partial or misspelled title), and `find_game_candidates` when you describe one without naming it, by publisher, genre, plot or "the new X game". The system prompt has examples of each.
+- Greetings and general questions are meant to get a normal reply, but Llama 3.1 8B often calls `search_game` with an empty or made-up title anyway.
 - The country (US, JP, GB, CA, AU, DE, FR) is picked in the UI.
 - Both lookups are cached in a local SQLite database (`agent/steam_tracker.db`, git-ignored), so repeat questions make fewer API calls, or none.
 
@@ -180,6 +181,21 @@ When there's a list, the assistant asks which one you mean and shows each game a
 - Only the latest list's buttons stay clickable. You can also type a game's title instead of clicking.
 
 Prices are then cached for 24 hours per game and country, so asking about the same game again needs no API calls at all.
+
+### Finding a game from a description
+
+For "the new Capcom samurai game" or "the game where you play as a knight in a bug kingdom", the `find_game_candidates` tool searches the knowledge base with [`find_game_candidates`](#finding-games-from-a-description) and always shows the results as buttons, even when there's only one, since a description is never certain:
+
+1. The knowledge base returns up to 5 games with their Steam App IDs.
+2. Each Steam App ID is mapped to an IsThereAnyDeal id. Mappings already in `game_catalog` (its `steam_appid` column) are reused; the rest are looked up in one IsThereAnyDeal request (`/lookup/id/shop/61/v1`, where 61 is Steam) and stored. A game already in the catalog from a search keeps its IsThereAnyDeal title.
+3. The games are shown as buttons, the same way as `search_game`'s choices. Clicking one looks up its price.
+4. A "None of these" button asks for the exact title, without calling the model or any tool. When nothing matches the description at all, the model asks for the exact title instead.
+
+Notes:
+
+- The tool searches the user's message as written, not the description the model passes. The model sometimes rewrites it, or copies one from the prompt's examples.
+- If `search_game` finds nothing for a title, the user's message is tried as a description before giving up, in case the model sent a description to the wrong tool.
+- Only games in the knowledge base can be found this way. "Ubisoft's pirate game" shows Ubisoft's other games, because Skull and Bones isn't in it yet.
 
 ### Prerequisites
 
@@ -208,9 +224,9 @@ It creates two tables:
 | Table          | Contents                                                                                                                                                    |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `game_library` | Cached price data (current deal and all-time low) per game and country, with the time it was fetched.                                                       |
-| `game_catalog` | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results.            |
+| `game_catalog` | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results. Games found from a description also have their `steam_appid`. |
 
-Running the script again is safe: tables are only created if they don't exist, so cached data is kept. If you already have a `steam_tracker.db` from before `game_catalog` existed, run the script once to add it. This also means schema changes don't apply to an existing database unless you drop the tables first.
+Running the script again is safe: tables are only created if they don't exist, so cached data is kept. If you already have a `steam_tracker.db` from before `game_catalog` existed, run the script once to add it. Columns added later, like `game_catalog.steam_appid`, are added to an existing table when the script runs, keeping its rows. Other schema changes don't apply to an existing database unless you drop the tables first.
 
 Settings in [agent/db_config.toml](agent/db_config.toml):
 
@@ -238,7 +254,7 @@ Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata) and the company matching and ranking behind `find_game_candidates`. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, and the database init (including adding `steam_appid` to an existing `game_catalog`). They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
 
 ## Project layout
 
