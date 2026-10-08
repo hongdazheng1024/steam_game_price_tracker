@@ -1,5 +1,8 @@
 # Settings for steam_price_db_init.py.
 
-# true drops game_library and game_catalog before recreating them, deleting all cached prices and
+# true drops every table before recreating them, deleting all cached prices, price history and
 # title-to-id mappings. Use it after changing a table schema; set it back to false afterwards.
 force_to_drop_tables = false
+
+# A game's price history is refetched (only the changes since the last fetch) once it's older than this.
+history_max_age_hours = 24

@@ -15,7 +15,14 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
         raise ValueError(
             f"'force_to_drop_tables' must be true or false, got {force_to_drop_tables!r}")
 
-    return {"force_to_drop_tables": force_to_drop_tables}
+    history_max_age_hours = raw.get("history_max_age_hours", 24)
+    # bool is a subclass of int, so rule it out explicitly
+    if isinstance(history_max_age_hours, bool) or not isinstance(history_max_age_hours, (int, float)) \
+            or history_max_age_hours <= 0:
+        raise ValueError(
+            f"'history_max_age_hours' must be a positive number, got {history_max_age_hours!r}")
+
+    return {"force_to_drop_tables": force_to_drop_tables, "history_max_age_hours": history_max_age_hours}
 
 
 def add_missing_columns(cursor):
@@ -31,6 +38,8 @@ def init_db(force_to_drop_tables: bool = False):
         if force_to_drop_tables:
             cursor.execute("DROP TABLE IF EXISTS game_library")
             cursor.execute("DROP TABLE IF EXISTS game_catalog")
+            cursor.execute("DROP TABLE IF EXISTS price_history")
+            cursor.execute("DROP TABLE IF EXISTS price_history_sync")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS game_library (
                 id TEXT,
@@ -52,6 +61,31 @@ def init_db(force_to_drop_tables: bool = False):
                 normalized_title TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 steam_appid INTEGER
+            );
+        """)
+        # Steam price changes from ITAD's /games/history/v2, one row per change. Prices are a step
+        # function: each row's price holds until the next row. Timestamps are stored in UTC.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS price_history (
+                game_id TEXT NOT NULL,
+                country_code TEXT NOT NULL,
+                shop_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                price REAL NOT NULL,
+                regular_price REAL NOT NULL,
+                cut INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                PRIMARY KEY (game_id, country_code, shop_id, timestamp)
+            );
+        """)
+        # When each game's history was last fetched, so a fresh history skips the API and a stale one
+        # only fetches what's new. A row with no price_history rows means the game has no Steam history.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS price_history_sync (
+                game_id TEXT NOT NULL,
+                country_code TEXT NOT NULL,
+                last_synced_at TEXT NOT NULL,
+                PRIMARY KEY (game_id, country_code)
             );
         """)
         add_missing_columns(cursor)
