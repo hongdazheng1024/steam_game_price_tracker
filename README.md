@@ -144,14 +144,14 @@ RAG_REBUILD=1 uv run python RAG/data_load.py    # force a full re-embed
 - Each game is scored by its best-matching chunk (relevance from about -0.2 for unrelated text to 0.6 for a clear match). Without a company match, nothing is returned when the best game scores under 0.2. Games more than 0.15 behind the best one are dropped.
 - The thresholds are set in [data_load.py](RAG/data_load.py) (`MIN_CANDIDATE_SCORE`, `MAX_CANDIDATE_GAP`, `MAX_CANDIDATES`). The matching and ranking logic is in [candidates.py](RAG/candidates.py), which needs no ML stack, so it is unit-tested.
 
-| Query                       | Candidates                                                                  |
-| --------------------------- | --------------------------------------------------------------------------- |
-| the new Capcom samurai game | Onimusha: Way of the Sword                                                  |
-| that Pragmata thing         | PRAGMATA                                                                    |
-| Capcom fighting game        | Street Fighter V, Street Fighter 6                                          |
-| FromSoftware souls game     | ELDEN RING                                                                  |
-| Ubisoft's pirate game       | Ubisoft's games in the knowledge base (Skull and Bones isn't in it yet)     |
-| best pizza recipe           | none                                                                        |
+| Query                       | Candidates                                                              |
+| --------------------------- | ----------------------------------------------------------------------- |
+| the new Capcom samurai game | Onimusha: Way of the Sword                                              |
+| that Pragmata thing         | PRAGMATA                                                                |
+| Capcom fighting game        | Street Fighter V, Street Fighter 6                                      |
+| FromSoftware souls game     | ELDEN RING                                                              |
+| Ubisoft's pirate game       | Ubisoft's games in the knowledge base (Skull and Bones isn't in it yet) |
+| best pizza recipe           | none                                                                    |
 
 The price-tracking agent calls it through its `find_game_candidates` tool (see [Finding a game from a description](#finding-a-game-from-a-description)).
 
@@ -219,22 +219,35 @@ cd agent
 uv run python steam_price_db_init.py
 ```
 
-It creates two tables:
+It creates four tables:
 
-| Table          | Contents                                                                                                                                                    |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `game_library` | Cached price data (current deal and all-time low) per game and country, with the time it was fetched.                                                       |
-| `game_catalog` | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results. Games found from a description also have their `steam_appid`. |
+| Table                | Contents                                                                                                                                                                                                        |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `game_library`       | Cached price data (current deal and all-time low) per game and country, with the time it was fetched.                                                                                                           |
+| `game_catalog`       | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results. Games found from a description also have their `steam_appid`. |
+| `price_history`      | Steam price changes per game and country from IsThereAnyDeal's `/games/history/v2`: timestamp (UTC), price, regular price, discount and currency. Each price holds until the next row.                          |
+| `price_history_sync` | When each game's history was last fetched, per country. A row with no `price_history` rows means the game has no Steam price history.                                                                           |
 
 Running the script again is safe: tables are only created if they don't exist, so cached data is kept. If you already have a `steam_tracker.db` from before `game_catalog` existed, run the script once to add it. Columns added later, like `game_catalog.steam_appid`, are added to an existing table when the script runs, keeping its rows. Other schema changes don't apply to an existing database unless you drop the tables first.
 
 Settings in [agent/db_config.toml](agent/db_config.toml):
 
-| Field                  | Required | Description                                                                                                                                                                      |
-| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `force_to_drop_tables` | No       | `true` drops `game_library` and `game_catalog` before recreating them, deleting all cached data. Use it after a schema change, then set it back to `false`. Defaults to `false`. |
+| Field                   | Required | Description                                                                                                                                                |
+| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `force_to_drop_tables`  | No       | `true` drops every table before recreating them, deleting all cached data. Use it after a schema change, then set it back to `false`. Defaults to `false`. |
+| `history_max_age_hours` | No       | How old a game's cached price history can get before it's refreshed. Defaults to `24`.                                                                     |
 
-The script stops with an error if the config file is missing or `force_to_drop_tables` isn't `true` or `false`.
+The script stops with an error if the config file is missing, `force_to_drop_tables` isn't `true` or `false`, or `history_max_age_hours` isn't a positive number.
+
+### Price history
+
+[agent/price_history.py](agent/price_history.py) fetches a game's Steam price history (shop 61) and caches it. `get_price_history` checks `price_history_sync` before calling the API:
+
+1. Never fetched: it fetches the full history. Without `since` the API only returns the last 3 months, so the first fetch asks for everything since 2000.
+2. Fetched less than `history_max_age_hours` ago: no API call.
+3. Older: it fetches only the changes since the last fetch (starting a day earlier in case IsThereAnyDeal recorded a change late; repeated rows are ignored).
+
+It then returns the history from the database, oldest first. The new rows and the sync time are saved in one transaction after a successful API call, so a failed call leaves the cache as it was.
 
 The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`. It drops the table on every run and can add a sample game.
 
@@ -254,7 +267,7 @@ Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, and the database init (including adding `steam_appid` to an existing `game_catalog`). They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), and the price history cache (with the API mocked out). They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
 
 ## Project layout
 
@@ -268,7 +281,8 @@ kb_builder/
 └── data/genre_tags.json
 agent/
 ├── steam_price_tracker.ipynb   price tool, Llama 3.1 agent and Gradio chat UI
-├── steam_price_db_init.py      creates the SQLite price cache and game catalog
+├── steam_price_db_init.py      creates the SQLite price cache, game catalog and price history tables
+├── price_history.py            Steam price history from IsThereAnyDeal, cached in SQLite
 ├── db_config.toml              database init settings
 └── steam_price_db_init.ipynb   older notebook version of the database init, with sample data
 RAG/
