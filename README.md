@@ -258,6 +258,20 @@ It then returns the history from the database, oldest first. The new rows and th
 
 Reviews and player counts are a snapshot from when they were fetched. The Steam user score can differ a lot from the Metascore: Monster Hunter Wilds and Monster Hunter: World both have a Metascore of 88, but Steam scores of 52 and 89.
 
+### Comparable games
+
+A newly released game has too little price history of its own, so its prices are predicted from comparable games. [agent/comparables.py](agent/comparables.py) finds them with `find_comparables(db_file, game_id, api_key, candidate_ids)`, ranking games released before the target on a ladder:
+
+1. Same publisher and same launch price tier (under $15, $15-30, $30-50, $50+)
+2. Same publisher, other or unknown tier, since one publisher may discount a AAA and an indie game differently
+3. Another publisher, same tier and at least one shared tag
+
+Within a level, games with the same Steam reception (Steam's labels: positive 80+, mostly positive 70-79, mixed 40-69, negative below 40) come first, then games with more shared tags, then newer games. Publishers are matched by IsThereAnyDeal company id.
+
+- `candidate_ids` are games worth fetching, such as the knowledge base's games from the same publisher. At most 10 are fetched, since each new one costs two API calls (details and history). Games already cached are considered too, at no API cost. A candidate that fails to fetch is skipped.
+- The launch price is the first regular price in the game's US history, so tiers are in dollars whatever the user's country. For games IsThereAnyDeal started tracking after release, it's an approximation.
+- A game IsThereAnyDeal has no release date for (like Street Fighter V) gets the date of its first recorded price instead, which may be a pre-order date, and is marked `release_date_estimated`.
+
 The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`. It drops the table on every run and can add a sample game.
 
 ### Running
@@ -276,7 +290,7 @@ Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), and the price history and game info caches (with the API mocked out). They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, and the comparable-game ranking (with the API mocked out). They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
 
 ## Project layout
 
@@ -293,6 +307,7 @@ agent/
 ├── steam_price_db_init.py      creates the SQLite price cache, game catalog and price history tables
 ├── price_history.py            Steam price history from IsThereAnyDeal, cached in SQLite
 ├── game_info.py                game details (release date, companies, reviews, players) from IsThereAnyDeal, cached in SQLite
+├── comparables.py              finds comparable games for price predictions (same publisher, price tier, reception)
 ├── db_config.toml              database init settings
 └── steam_price_db_init.ipynb   older notebook version of the database init, with sample data
 RAG/
