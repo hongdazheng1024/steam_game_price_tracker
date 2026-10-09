@@ -15,14 +15,19 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
         raise ValueError(
             f"'force_to_drop_tables' must be true or false, got {force_to_drop_tables!r}")
 
-    history_max_age_hours = raw.get("history_max_age_hours", 24)
-    # bool is a subclass of int, so rule it out explicitly
-    if isinstance(history_max_age_hours, bool) or not isinstance(history_max_age_hours, (int, float)) \
-            or history_max_age_hours <= 0:
-        raise ValueError(
-            f"'history_max_age_hours' must be a positive number, got {history_max_age_hours!r}")
+    return {
+        "force_to_drop_tables": force_to_drop_tables,
+        "history_max_age_hours": positive_number(raw, "history_max_age_hours", 24),
+        "game_info_max_age_hours": positive_number(raw, "game_info_max_age_hours", 168),
+    }
 
-    return {"force_to_drop_tables": force_to_drop_tables, "history_max_age_hours": history_max_age_hours}
+
+def positive_number(raw: dict, key: str, default: float) -> float:
+    value = raw.get(key, default)
+    # bool is a subclass of int, so rule it out explicitly
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ValueError(f"'{key}' must be a positive number, got {value!r}")
+    return value
 
 
 def add_missing_columns(cursor):
@@ -40,6 +45,8 @@ def init_db(force_to_drop_tables: bool = False):
             cursor.execute("DROP TABLE IF EXISTS game_catalog")
             cursor.execute("DROP TABLE IF EXISTS price_history")
             cursor.execute("DROP TABLE IF EXISTS price_history_sync")
+            cursor.execute("DROP TABLE IF EXISTS game_info")
+            cursor.execute("DROP TABLE IF EXISTS game_companies")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS game_library (
                 id TEXT,
@@ -88,6 +95,38 @@ def init_db(force_to_drop_tables: bool = False):
                 PRIMARY KEY (game_id, country_code)
             );
         """)
+        # Details from ITAD's /games/info/v2, used to find and compare similar games. Reviews and player
+        # counts are a snapshot from fetched_at. tags is a JSON list. Scores are 0-100; NULL if ITAD has none.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS game_info (
+                game_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                steam_appid INTEGER,
+                release_date TEXT,
+                early_access INTEGER NOT NULL,
+                tags TEXT NOT NULL,
+                steam_score INTEGER,
+                steam_review_count INTEGER,
+                metascore INTEGER,
+                players_recent INTEGER,
+                players_peak INTEGER,
+                fetched_at TEXT NOT NULL
+            );
+        """)
+        # A game's publishers and developers by ITAD company id. One company can appear under several
+        # names ("Capcom", "Capcom Co., Ltd."), but they share an id, so comparables match on company_id.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS game_companies (
+                game_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('publisher', 'developer')),
+                company_id INTEGER NOT NULL,
+                company_name TEXT NOT NULL,
+                PRIMARY KEY (game_id, role, company_id)
+            );
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_game_companies_company ON game_companies (company_id, role)"
+        )
         add_missing_columns(cursor)
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_game_catalog_normalized_title ON game_catalog (normalized_title)"

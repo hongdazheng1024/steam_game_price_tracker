@@ -6,3 +6,6 @@ force_to_drop_tables = false
 
 # A game's price history is refetched (only the changes since the last fetch) once it's older than this.
 history_max_age_hours = 24
+
+# A game's details (release date, publishers, reviews, player counts) are refetched once older than this.
+game_info_max_age_hours = 168
