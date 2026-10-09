@@ -219,25 +219,28 @@ cd agent
 uv run python steam_price_db_init.py
 ```
 
-It creates four tables:
+It creates six tables:
 
-| Table                | Contents                                                                                                                                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `game_library`       | Cached price data (current deal and all-time low) per game and country, with the time it was fetched.                                                                                                           |
-| `game_catalog`       | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results. Games found from a description also have their `steam_appid`. |
-| `price_history`      | Steam price changes per game and country from IsThereAnyDeal's `/games/history/v2`: timestamp (UTC), price, regular price, discount and currency. Each price holds until the next row.                          |
-| `price_history_sync` | When each game's history was last fetched, per country. A row with no `price_history` rows means the game has no Steam price history.                                                                           |
+| Table                | Contents                                                                                                                                                                                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `game_library`       | Cached price data (current deal and all-time low) per game and country, with the time it was fetched.                                                                                                                      |
+| `game_catalog`       | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results. Games found from a description also have their `steam_appid`.            |
+| `price_history`      | Steam price changes per game and country from IsThereAnyDeal's `/games/history/v2`: timestamp (UTC), price, regular price, discount and currency. Each price holds until the next row.                                     |
+| `price_history_sync` | When each game's history was last fetched, per country. A row with no `price_history` rows means the game has no Steam price history.                                                                                      |
+| `game_info`          | Details per game from IsThereAnyDeal's `/games/info/v2`: release date, Steam App ID, early access, tags, Steam user score and review count, Metascore, and recent and peak player counts, with the time they were fetched. |
+| `game_companies`     | Each game's publishers and developers by IsThereAnyDeal company id. One company can appear under several names ("Capcom", "Capcom Co., Ltd.") but shares one id, so similar games are matched by id.                       |
 
 Running the script again is safe: tables are only created if they don't exist, so cached data is kept. If you already have a `steam_tracker.db` from before `game_catalog` existed, run the script once to add it. Columns added later, like `game_catalog.steam_appid`, are added to an existing table when the script runs, keeping its rows. Other schema changes don't apply to an existing database unless you drop the tables first.
 
 Settings in [agent/db_config.toml](agent/db_config.toml):
 
-| Field                   | Required | Description                                                                                                                                                |
-| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `force_to_drop_tables`  | No       | `true` drops every table before recreating them, deleting all cached data. Use it after a schema change, then set it back to `false`. Defaults to `false`. |
-| `history_max_age_hours` | No       | How old a game's cached price history can get before it's refreshed. Defaults to `24`.                                                                     |
+| Field                     | Required | Description                                                                                                                                                |
+| ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `force_to_drop_tables`    | No       | `true` drops every table before recreating them, deleting all cached data. Use it after a schema change, then set it back to `false`. Defaults to `false`. |
+| `history_max_age_hours`   | No       | How old a game's cached price history can get before it's refreshed. Defaults to `24`.                                                                     |
+| `game_info_max_age_hours` | No       | How old a game's cached details (reviews, player counts, publishers) can get before they're refetched. Defaults to `168` (a week).                         |
 
-The script stops with an error if the config file is missing, `force_to_drop_tables` isn't `true` or `false`, or `history_max_age_hours` isn't a positive number.
+The script stops with an error if the config file is missing, `force_to_drop_tables` isn't `true` or `false`, or either max age isn't a positive number.
 
 ### Price history
 
@@ -248,6 +251,12 @@ The script stops with an error if the config file is missing, `force_to_drop_tab
 3. Older: it fetches only the changes since the last fetch (starting a day earlier in case IsThereAnyDeal recorded a change late; repeated rows are ignored).
 
 It then returns the history from the database, oldest first. The new rows and the sync time are saved in one transaction after a successful API call, so a failed call leaves the cache as it was.
+
+### Game info
+
+[agent/game_info.py](agent/game_info.py) fetches a game's details and caches them in `game_info` and `game_companies`. `get_game_info` calls the API only when the game was never fetched or its details are older than `game_info_max_age_hours`, and a refresh replaces the details and company list together. It returns `None` for a game IsThereAnyDeal doesn't know. The details will be used to find comparable games for price predictions: same publisher, similar launch price, similar Steam reception.
+
+Reviews and player counts are a snapshot from when they were fetched. The Steam user score can differ a lot from the Metascore: Monster Hunter Wilds and Monster Hunter: World both have a Metascore of 88, but Steam scores of 52 and 89.
 
 The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`. It drops the table on every run and can add a sample game.
 
@@ -267,7 +276,7 @@ Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), and the price history cache (with the API mocked out). They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), and the price history and game info caches (with the API mocked out). They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
 
 ## Project layout
 
@@ -283,6 +292,7 @@ agent/
 ├── steam_price_tracker.ipynb   price tool, Llama 3.1 agent and Gradio chat UI
 ├── steam_price_db_init.py      creates the SQLite price cache, game catalog and price history tables
 ├── price_history.py            Steam price history from IsThereAnyDeal, cached in SQLite
+├── game_info.py                game details (release date, companies, reviews, players) from IsThereAnyDeal, cached in SQLite
 ├── db_config.toml              database init settings
 └── steam_price_db_init.ipynb   older notebook version of the database init, with sample data
 RAG/

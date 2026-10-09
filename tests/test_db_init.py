@@ -38,10 +38,10 @@ def tables(db_file):
         return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
-def test_new_database_has_price_history_tables(tmp_path, monkeypatch):
+def test_new_database_has_price_history_and_game_info_tables(tmp_path, monkeypatch):
     monkeypatch.setattr(steam_price_db_init, "DB_FILE", str(tmp_path / "new.db"))
     init_db()
-    assert {"price_history", "price_history_sync"} <= tables(tmp_path / "new.db")
+    assert {"price_history", "price_history_sync", "game_info", "game_companies"} <= tables(tmp_path / "new.db")
 
 
 def test_force_drop_clears_price_history(tmp_path, monkeypatch):
@@ -63,11 +63,13 @@ def write_config(tmp_path, text):
     return path
 
 
-def test_history_max_age_defaults_to_24_hours(tmp_path):
-    assert load_config(write_config(tmp_path, ""))["history_max_age_hours"] == 24
+def test_max_ages_have_defaults(tmp_path):
+    config = load_config(write_config(tmp_path, ""))
+    assert (config["history_max_age_hours"], config["game_info_max_age_hours"]) == (24, 168)
 
 
+@pytest.mark.parametrize("key", ["history_max_age_hours", "game_info_max_age_hours"])
 @pytest.mark.parametrize("value", ["0", "-1", "true", '"24"'])
-def test_invalid_history_max_age_is_rejected(tmp_path, value):
+def test_invalid_max_age_is_rejected(tmp_path, key, value):
     with pytest.raises(ValueError):
-        load_config(write_config(tmp_path, f"history_max_age_hours = {value}"))
+        load_config(write_config(tmp_path, f"{key} = {value}"))
