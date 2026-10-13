@@ -1,0 +1,55 @@
+{
+  "notes": "Steam's seasonal sales. Dates are as Valve announces them: a sale starts and ends at 10am Pacific on these days. The year is the year the sale starts. verified=true: a published source (Valve or press coverage at the time) gave these dates and none disagreed. verified=false: sources conflict or none was found; 'note' says which. Spring Sales start in 2023; Valve held no seasonal spring sale before that.",
+  "sales": [
+    {"season": "Summer", "start": "2016-06-23", "end": "2016-07-04", "verified": true},
+    {"season": "Autumn", "start": "2016-11-23", "end": "2016-11-29", "verified": true},
+    {"season": "Winter", "start": "2016-12-22", "end": "2017-01-02", "verified": true},
+
+    {"season": "Summer", "start": "2017-06-22", "end": "2017-07-05", "verified": true},
+    {"season": "Autumn", "start": "2017-11-22", "end": "2017-11-28", "verified": true},
+    {"season": "Winter", "start": "2017-12-21", "end": "2018-01-04", "verified": true},
+
+    {"season": "Summer", "start": "2018-06-21", "end": "2018-07-05", "verified": true},
+    {"season": "Autumn", "start": "2018-11-21", "end": "2018-11-27", "verified": true, "note": "One source gave November 22; discounts in the price history start on November 21."},
+    {"season": "Winter", "start": "2018-12-20", "end": "2019-01-03", "verified": true},
+
+    {"season": "Summer", "start": "2019-06-25", "end": "2019-07-09", "verified": true},
+    {"season": "Autumn", "start": "2019-11-26", "end": "2019-12-03", "verified": true},
+    {"season": "Winter", "start": "2019-12-19", "end": "2020-01-02", "verified": true},
+
+    {"season": "Summer", "start": "2020-06-25", "end": "2020-07-09", "verified": true},
+    {"season": "Autumn", "start": "2020-11-25", "end": "2020-12-01", "verified": true},
+    {"season": "Winter", "start": "2020-12-22", "end": "2021-01-05", "verified": true},
+
+    {"season": "Summer", "start": "2021-06-24", "end": "2021-07-08", "verified": true},
+    {"season": "Autumn", "start": "2021-11-24", "end": "2021-12-01", "verified": true, "note": "Valve first listed November 30 as the end; the sale ran until December 1."},
+    {"season": "Winter", "start": "2021-12-22", "end": "2022-01-05", "verified": true},
+
+    {"season": "Summer", "start": "2022-06-23", "end": "2022-07-07", "verified": true},
+    {"season": "Autumn", "start": "2022-11-22", "end": "2022-11-29", "verified": true},
+    {"season": "Winter", "start": "2022-12-22", "end": "2023-01-05", "verified": true},
+
+    {"season": "Spring", "start": "2023-03-16", "end": "2023-03-23", "verified": true},
+    {"season": "Summer", "start": "2023-06-29", "end": "2023-07-13", "verified": true},
+    {"season": "Autumn", "start": "2023-11-21", "end": "2023-11-28", "verified": true},
+    {"season": "Winter", "start": "2023-12-21", "end": "2024-01-04", "verified": true},
+
+    {"season": "Spring", "start": "2024-03-14", "end": "2024-03-21", "verified": true},
+    {"season": "Summer", "start": "2024-06-27", "end": "2024-07-11", "verified": true, "note": "One source gave June 28; discounts in the price history start on June 27."},
+    {"season": "Autumn", "start": "2024-11-27", "end": "2024-12-04", "verified": true},
+    {"season": "Winter", "start": "2024-12-19", "end": "2025-01-02", "verified": true},
+
+    {"season": "Spring", "start": "2025-03-13", "end": "2025-03-20", "verified": true},
+    {"season": "Summer", "start": "2025-06-26", "end": "2025-07-10", "verified": true},
+    {"season": "Autumn", "start": "2025-09-29", "end": "2025-10-06", "verified": true, "note": "Valve moved the Autumn Sale from late November to early autumn this year."},
+    {"season": "Winter", "start": "2025-12-18", "end": "2026-01-05", "verified": true},
+
+    {"season": "Spring", "start": "2026-03-19", "end": "2026-03-26", "verified": true},
+    {"season": "Summer", "start": "2026-06-25", "end": "2026-07-09", "verified": true, "note": "Only one source found."},
+    {"season": "Autumn", "start": "2026-10-01", "end": "2026-10-08", "verified": true, "note": "Only one source found."},
+    {"season": "Winter", "start": "2026-12-17", "end": "2027-01-04", "verified": true},
+
+    {"season": "Spring", "start": "2027-03-18", "end": "2027-03-25", "verified": true},
+    {"season": "Summer", "start": "2027-06-24", "end": "2027-07-08", "verified": true}
+  ]
+}
