@@ -282,6 +282,15 @@ Within a level, games with the same Steam reception (Steam's labels: positive 80
 
 Each entry has a `season`, `start` and `end` (as Valve announces them; sales start and end at 10am Pacific) and `verified`. `verified` is `false` where sources conflict or none was found, with a `note` saying which. To add a sale, add an entry; the name is built from the season and the start year.
 
+### Target-price prediction
+
+[agent/prediction.py](agent/prediction.py) estimates when a game will cost a target price or less. `predict_target_price(target, history, target_price, comparables, comparable_histories, sales, today)` only computes from data already fetched (no API calls) and returns a `status`, a `basis`, a `confidence`, a `projected_date` and a `summary`: plain text with every number worked out, so the LLM only has to explain it.
+
+- **Own history**, when the game has reached the target at least twice: the median gap between those times projects the next one. The summary lists each time with what caused it (a seasonal sale, the publisher's own sale, or a regular-price cut) and how many past sales of each season reached the target.
+- **Comparables**, otherwise: the target becomes a fraction of the launch price ($35 for a $69.99 game is 50%), and each comparable's age when it first cost that fraction of its own launch price gives the projected age. A fraction works across currencies and launch prices, and counts permanent price cuts as well as sales. Comparables with an estimated release date are left out unless they're all there is, since the estimate may be a pre-order date.
+
+It also lists the game's regular-price cuts and the comparables' first cuts (for "when will the regular price drop?"), flags reception that's much weaker or stronger than the comparables', and names the next seasonal sales around the projected date. `status` is `already_met`, `predicted`, `not_seen` (neither the game nor its comparables have been that cheap) or `no_data`. Confidence is high with three or more of the game's own reaches, medium with two, or with three same-publisher, same-tier comparables, and low otherwise.
+
 The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`. It drops the table on every run and can add a sample game.
 
 ### Running
@@ -300,7 +309,7 @@ Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, the comparable-game ranking (with the API mocked out), and the seasonal sale calendar. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, the comparable-game ranking (with the API mocked out), the seasonal sale calendar, and the target-price prediction. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
 
 ## Project layout
 
@@ -319,6 +328,7 @@ agent/
 ├── game_info.py                game details (release date, companies, reviews, players) from IsThereAnyDeal, cached in SQLite
 ├── comparables.py              finds comparable games for price predictions (same publisher, price tier, reception)
 ├── sale_calendar.py            Steam's seasonal sale windows, for tagging discounts as seasonal sales
+├── prediction.py               when a game will reach a target price, from its own or its comparables' history
 ├── data/steam_sales.json       seasonal sale dates since 2016
 ├── db_config.toml              database init settings
 └── steam_price_db_init.ipynb   older notebook version of the database init, with sample data
