@@ -272,6 +272,16 @@ Within a level, games with the same Steam reception (Steam's labels: positive 80
 - The launch price is the first regular price in the game's US history, so tiers are in dollars whatever the user's country. For games IsThereAnyDeal started tracking after release, it's an approximation.
 - A game IsThereAnyDeal has no release date for (like Street Fighter V) gets the date of its first recorded price instead, which may be a pre-order date, and is marked `release_date_estimated`.
 
+### Seasonal sale calendar
+
+`price_history` records that a price changed, not why. [agent/data/steam_sales.json](agent/data/steam_sales.json) lists Steam's seasonal sales (Summer, Autumn and Winter from 2016 on, Spring from 2023 on), including announced future sales, and [agent/sale_calendar.py](agent/sale_calendar.py) uses it to tell seasonal discounts from a publisher's own:
+
+- `load_sales()` reads the file, oldest first, and raises an error for a malformed entry, a sale that ends before it starts, or two overlapping sales.
+- `tag_discounts(history, sales)` adds `"sale"` to each history row: the sale's name (for example `"Summer Sale 2025"`) for a discount that started in its window or up to a day before, else `None`.
+- `upcoming_sales(today, sales)` returns the next sales, including one that's on now.
+
+Each entry has a `season`, `start` and `end` (as Valve announces them; sales start and end at 10am Pacific) and `verified`. `verified` is `false` where sources conflict or none was found, with a `note` saying which. To add a sale, add an entry; the name is built from the season and the start year.
+
 The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`. It drops the table on every run and can add a sample game.
 
 ### Running
@@ -290,7 +300,7 @@ Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, and the comparable-game ranking (with the API mocked out). They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, the comparable-game ranking (with the API mocked out), and the seasonal sale calendar. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
 
 ## Project layout
 
@@ -308,6 +318,8 @@ agent/
 ├── price_history.py            Steam price history from IsThereAnyDeal, cached in SQLite
 ├── game_info.py                game details (release date, companies, reviews, players) from IsThereAnyDeal, cached in SQLite
 ├── comparables.py              finds comparable games for price predictions (same publisher, price tier, reception)
+├── sale_calendar.py            Steam's seasonal sale windows, for tagging discounts as seasonal sales
+├── data/steam_sales.json       seasonal sale dates since 2016
 ├── db_config.toml              database init settings
 └── steam_price_db_init.ipynb   older notebook version of the database init, with sample data
 RAG/
