@@ -204,7 +204,28 @@ When the user asks "when will it drop to $25?", the `predict_target_price` tool 
 1. The title is resolved like `search_game`'s, except that without an exact catalog match it searches IsThereAnyDeal right away, since the catalog's partial matches may only be the game's DLCs. Several matches come back as choices.
 2. The game's price history in the selected country is loaded ([Price history](#price-history)).
 3. Only if that history isn't enough (the game isn't at the target and has reached it fewer than twice) does it fetch comparables, since each costs API calls. The candidates are the knowledge base's games from the same publishers, matched on the publisher names IsThereAnyDeal gives (`games_by_companies` in `RAG/data_load.py`), then ranked by [`find_comparables`](#comparable-games).
-4. [`predict_target_price`](#target-price-prediction) works out the prediction, and the model explains its summary.
+4. [`predict_target_price`](#target-price-prediction) works out the prediction.
+5. The reply is the model's sentence or two followed by the prediction's facts block, as written. The model only sees the headline (the facts block is left out of the tool result it gets) and is held to one or two sentences. `clean_intro` keeps the first paragraph's first two complete sentences, and swaps in a fixed intro ("Here's my estimate for Hades.") if they contain numbers the headline doesn't have, Markdown, talk about the tool or its result, or words like "likely" for a low-confidence prediction.
+
+A reply looks like this:
+
+```
+Monster Hunter Wilds might reach $25 around January 2027, though it's hard to call.
+
+**Monster Hunter Wilds → $25.00** (64% off its $69.99 launch price)
+- **Now:** $39.99 · all-time low $29.39
+- **Projected:** around **Jan 2027**, based on similar games
+- **Similar games:**
+  - Monster Hunter: World (same publisher and price tier): 64% off at 18 months (Feb 2020, publisher's own sale)
+  - Street Fighter V (same publisher and price tier): 64% off at 18 months (Dec 2016, Winter Sale 2016), *not used: release date estimated*
+  - Street Fighter 6 (same publisher and price tier): 64% off at 28 months (Sep 2025, publisher's own sale)
+- **Sales to watch:** Winter Sale 2026 (Dec 17 – Jan 4); Spring Sale 2027 (Mar 18 – 25)
+- **Reception:** mixed (52%) vs 81% for similar games, so an earlier or deeper cut is more likely
+- **Regular price:** cut from $69.99 to $39.99 in Aug 2026, 17 months after release
+- **Confidence:** low, from 2 similar games with known release dates
+
+*Estimate from past Steam prices, not a guarantee.*
+```
 
 A target price that's missing or not a number (the model sometimes sends `0`) makes the model ask the user what they'd pay.
 
@@ -295,12 +316,12 @@ Each entry has a `season`, `start` and `end` (as Valve announces them; sales sta
 
 ### Target-price prediction
 
-[agent/prediction.py](agent/prediction.py) estimates when a game will cost a target price or less. `predict_target_price(target, history, target_price, comparables, comparable_histories, sales, today)` only computes from data already fetched (no API calls) and returns a `status`, a `basis`, a `confidence`, a `projected_date` and a `summary`: plain text with every number worked out, so the LLM only has to explain it.
+[agent/prediction.py](agent/prediction.py) estimates when a game will cost a target price or less. `predict_target_price(target, history, target_price, comparables, comparable_histories, sales, today)` only computes from data already fetched (no API calls) and returns a `status`, a `basis`, a `confidence`, a `projected_date`, a `facts` block in Markdown (shown to the user as written, so every number is right and nothing is left out) and a one-line `headline` for the LLM's intro. The headline words the projection by confidence: "might" (low), "is likely to" (medium), "is very likely to" (high).
 
-- **Own history**, when the game has reached the target at least twice: the median gap between those times projects the next one. The summary lists each time with what caused it (a seasonal sale, the publisher's own sale, or a regular-price cut) and how many past sales of each season reached the target.
+- **Own history**, when the game has reached the target at least twice (a price up to 3% above it counts, so a game that keeps stopping at $35.99 counts for a $35 target; the facts block then says "4 times at $35.99 (within 3% of your $35.00; never lower)" and the headline "about $35.00"): the median gap between those times projects the next one. The facts block gives the last time with what caused it (a seasonal sale, the publisher's own sale, or a regular-price cut) and how many past sales of each season reached the target.
 - **Comparables**, otherwise: the target becomes a fraction of the launch price ($35 for a $69.99 game is 50%), and each comparable's age when it first cost that fraction of its own launch price gives the projected age. A fraction works across currencies and launch prices, and counts permanent price cuts as well as sales. Comparables with an estimated release date are left out unless they're all there is, since the estimate may be a pre-order date.
 
-It also lists the game's regular-price cuts and the comparables' first cuts (for "when will the regular price drop?"), flags reception that's much weaker or stronger than the comparables', and names the next seasonal sales around the projected date. `status` is `already_met`, `predicted`, `not_seen` (neither the game nor its comparables have been that cheap) or `no_data`. Confidence is high with three or more of the game's own reaches, medium with two, or with three same-publisher, same-tier comparables, and low otherwise.
+It also lists up to 3 similar games (an unused one, with an estimated release date, is marked), the game's regular-price cuts, or the similar games' first cuts if it has none (for "when will the regular price drop?"), flags reception that's much weaker or stronger than the comparables', and names the next seasonal sales around the projected date. A projected date that's already past is shown as "due at any sale now", so the reply never predicts a month that's gone. "Already at the target" stays strict: a current price within 3% above it gets "$0.99 above your target" instead. `status` is `already_met`, `predicted`, `not_seen` (neither the game nor its comparables have been that cheap) or `no_data`. Confidence is high with three or more of the game's own reaches, medium with two, or with three same-publisher, same-tier comparables, and low otherwise.
 
 The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.ipynb) still creates only `game_library`. It drops the table on every run and can add a sample game.
 
