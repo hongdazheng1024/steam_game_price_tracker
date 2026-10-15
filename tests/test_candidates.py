@@ -1,4 +1,4 @@
-from candidates import company_key, index_company_games, match_company_games, rank_candidates, split_companies
+from candidates import company_game_names, company_key, index_company_games, match_company_games, rank_candidates, split_companies
 
 
 def test_company_key_drops_case_punctuation_and_suffixes():
@@ -38,6 +38,14 @@ def test_query_matches_companies_as_whole_words():
     assert match_company_games("a game by Bandai Namco Entertainment", COMPANY_GAMES) == {"elden-ring"}
     assert match_company_games("nba 2k27", COMPANY_GAMES) == set()
     assert match_company_games("Ubisoft's pirate game", COMPANY_GAMES) == set()
+
+
+def test_company_names_match_whatever_the_suffix():
+    assert company_game_names(["Capcom", "Capcom Co., Ltd.", "Capcom (JP)"], COMPANY_GAMES) == \
+        {"pragmata", "street-fighter-6"}
+    assert company_game_names(["FromSoftware, Inc."], COMPANY_GAMES) == {"elden-ring"}
+    assert company_game_names(["Ubisoft"], COMPANY_GAMES) == set()
+    assert company_game_names([], COMPANY_GAMES) == set()
 
 
 def meta(name, **extra):

@@ -59,6 +59,15 @@ def match_company_games(query: str, company_games: dict[str, set[str]]) -> set[s
     return names
 
 
+def company_game_names(company_names: list[str], company_games: dict[str, set[str]]) -> set[str]:
+    """Names of the games made or published by any of these companies, e.g. a game's publishers as
+    IsThereAnyDeal lists them ("Capcom", "Capcom Co., Ltd.")."""
+    names = set()
+    for company in company_names:
+        names |= company_games.get(company_key(company), set())
+    return names
+
+
 def rank_candidates(scored: list[tuple[dict, float]], min_score: float | None,
                     max_gap: float, max_results: int) -> list[dict]:
     """Turn (chunk metadata, relevance score) pairs into games, best first.
