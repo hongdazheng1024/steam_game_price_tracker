@@ -8,7 +8,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 
-from candidates import index_company_games, match_company_games, rank_candidates
+from candidates import company_game_names, index_company_games, match_company_games, rank_candidates
 from chunking import SCHEMA_VERSION, load_chunks
 
 NOTEBOOK_DIR = Path(os.path.abspath(__file__)).parent
@@ -91,6 +91,20 @@ def retrieve_from_vectorstore(query: str) -> list[str]:
 # Developer/publisher -> game names, so a query naming a company can be limited to its games
 company_games = index_company_games(
     [chunk.metadata for chunk in chunks if chunk.metadata["doc_type"] == "game"])
+
+
+# Game file name -> its header metadata (title, steam_appid, ...)
+game_metadata = {chunk.metadata["name"]: chunk.metadata for chunk in chunks if chunk.metadata["doc_type"] == "game"}
+
+
+def games_by_companies(company_names: list[str]) -> list[dict]:
+    """Knowledge-base games made or published by any of these companies, as {"title", "steam_appid"}.
+
+    Used to find comparable games for a price prediction: a game's publishers, as IsThereAnyDeal
+    lists them, give the knowledge base's other games from the same publisher."""
+    names = company_game_names(company_names, company_games)
+    return [{"title": game_metadata[name].get("title", name), "steam_appid": game_metadata[name]["steam_appid"]}
+            for name in sorted(names) if "steam_appid" in game_metadata[name]]
 
 
 def scored_search(query: str, k: int, filter: dict) -> list:

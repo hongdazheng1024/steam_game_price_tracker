@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from prediction import format_price, lowest_during, predict_target_price, reaches, regular_cuts
+from prediction import format_price, lowest_during, needs_comparables, predict_target_price, reaches, regular_cuts
 from sale_calendar import Sale
 
 TODAY = date(2026, 10, 13)
@@ -57,6 +57,23 @@ def test_regular_cuts():
                                                     (29.99, "EUR", "29.99 EUR")])
 def test_format_price(amount, currency, text):
     assert format_price(amount, currency) == text
+
+
+@pytest.mark.parametrize("history, needed", [
+    ([], False),                                                                    # nothing to predict from
+    ([row("2025-03-01", 69.99), row("2026-01-01", 29.99)], False),                  # already at the target
+    ([row("2025-03-01", 69.99)], True),                                             # never reached
+    ([row("2025-03-01", 69.99), row("2025-06-26", 34.99), row("2025-07-10", 69.99)], True),   # once
+    ([row("2025-03-01", 69.99), row("2025-06-26", 34.99), row("2025-07-10", 69.99),
+      row("2025-12-18", 34.99), row("2026-01-05", 69.99)], False),                  # twice: own history is enough
+])
+def test_needs_comparables(history, needed):
+    assert needs_comparables(history, 35) is needed
+
+
+def test_target_above_the_launch_price():
+    result = predict([row("2025-03-01", 69.99)], 100)
+    assert "Target: $100.00, at or above the launch price of $69.99." in result["summary"]
 
 
 def test_no_history():

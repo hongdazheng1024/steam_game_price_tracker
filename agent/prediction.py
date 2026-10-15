@@ -143,6 +143,13 @@ def describe_sale(sale: Sale, record: dict) -> str:
     return text
 
 
+def needs_comparables(history: list[dict], target_price: float) -> bool:
+    """Whether a prediction for this history would use comparables, so they're only fetched when needed:
+    the game isn't already at the target and has reached it fewer than MIN_OWN_HITS times."""
+    return bool(history) and history[-1]["price"] > target_price + PRICE_EPSILON \
+        and len(reaches(history, target_price)) < MIN_OWN_HITS
+
+
 def predict_target_price(target: dict, history: list[dict], target_price: float, comparables: list[dict],
                          comparable_histories: dict[str, list[dict]], sales: list[Sale], today: date) -> dict:
     """When the target game is likely to cost target_price or less.
@@ -168,7 +175,8 @@ def predict_target_price(target: dict, history: list[dict], target_price: float,
     discount = f", {current['cut']}% off" if current["cut"] else ""
     lines = [
         f"Game: {title}, released {release} ({months((today - release).days)} months ago).",
-        f"Target: {price(target_price)}, {percent_off}% off the launch price of {price(launch)}.",
+        f"Target: {price(target_price)}, {percent_off}% off the launch price of {price(launch)}." if percent_off > 0
+        else f"Target: {price(target_price)}, at or above the launch price of {price(launch)}.",
         f"Current price: {price(current['price'])} (regular {price(current['regular_price'])}{discount}). "
         f"All-time low: {price(min(row['price'] for row in history))}.",
     ]

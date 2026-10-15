@@ -31,7 +31,7 @@ The vector library gives the LLM context a price history can't: a game's genre, 
 | Price data from IsThereAnyDeal (cached in SQLite)                | Done    |
 | Price-tracking agent (Llama 3.1 tool calling, Gradio chat UI)    | Done    |
 | Buy-or-wait recommendations                                      | Done    |
-| Target-price prediction (price history + RAG context)            | Planned |
+| Target-price prediction (price history + RAG context)            | In progress |
 | Python ML service (RAG + Llama 3.1) exposed over HTTP            | Planned |
 | Spring Boot backend (users, preferences, track list, price jobs) | Planned |
 | Next.js chat frontend                                            | Planned |
@@ -197,6 +197,17 @@ Notes:
 - If `search_game` finds nothing for a title, the user's message is tried as a description before giving up, in case the model sent a description to the wrong tool.
 - Only games in the knowledge base can be found this way. "Ubisoft's pirate game" shows Ubisoft's other games, because Skull and Bones isn't in it yet.
 
+### Predicting when a game hits a target price
+
+When the user asks "when will it drop to $25?", the `predict_target_price` tool takes the game title (the model carries it over from earlier in the conversation) and the target price:
+
+1. The title is resolved like `search_game`'s, except that without an exact catalog match it searches IsThereAnyDeal right away, since the catalog's partial matches may only be the game's DLCs. Several matches come back as choices.
+2. The game's price history in the selected country is loaded ([Price history](#price-history)).
+3. Only if that history isn't enough (the game isn't at the target and has reached it fewer than twice) does it fetch comparables, since each costs API calls. The candidates are the knowledge base's games from the same publishers, matched on the publisher names IsThereAnyDeal gives (`games_by_companies` in `RAG/data_load.py`), then ranked by [`find_comparables`](#comparable-games).
+4. [`predict_target_price`](#target-price-prediction) works out the prediction, and the model explains its summary.
+
+A target price that's missing or not a number (the model sometimes sends `0`) makes the model ask the user what they'd pay.
+
 ### Prerequisites
 
 1. Get an API key from [IsThereAnyDeal](https://isthereanydeal.com/apps/my/).
@@ -223,7 +234,7 @@ It creates six tables:
 
 | Table                | Contents                                                                                                                                                                                                                   |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `game_library`       | Cached price data (current deal and all-time low) per game and country, with the time it was fetched.                                                                                                                      |
+| `game_library`       | Cached Steam price data (current deal and all-time low) per game and country, with the time it was fetched.                                                                                                                 |
 | `game_catalog`       | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results. Games found from a description also have their `steam_appid`.            |
 | `price_history`      | Steam price changes per game and country from IsThereAnyDeal's `/games/history/v2`: timestamp (UTC), price, regular price, discount and currency. Each price holds until the next row.                                     |
 | `price_history_sync` | When each game's history was last fetched, per country. A row with no `price_history` rows means the game has no Steam price history.                                                                                      |
