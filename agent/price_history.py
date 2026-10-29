@@ -28,7 +28,9 @@ def fetch_history(game_id: str, country: str, since: datetime, api_key: str) -> 
     response = requests.get(
         HISTORY_URL,
         headers={"ITAD-API-Key": api_key},
-        params={"id": game_id, "country": country, "shops": STEAM_SHOP_ID, "since": since.isoformat()},
+        # ITAD rejects fractional seconds in `since` ("Invalid 'since' format")
+        params={"id": game_id, "country": country, "shops": STEAM_SHOP_ID,
+                "since": since.isoformat(timespec="seconds")},
         timeout=30,
     )
     response.raise_for_status()
@@ -64,11 +66,13 @@ def get_price_history(db_file: str, game_id: str, country: str, api_key: str,
     last_synced = datetime.fromisoformat(row[0]) if row else None
     if last_synced is None or now - last_synced >= max_age:
         since = FULL_HISTORY_SINCE if last_synced is None else last_synced - SYNC_OVERLAP
-        print(f"calling /history API for {game_id} ({country}) since {since.date()}")
-        rows = history_rows(game_id, country, fetch(game_id, country, since, api_key))
+        print(f"calling /history API for {game_id} ({country}) since {since}")
+        rows = history_rows(game_id, country, fetch(
+            game_id, country, since, api_key))
         # One transaction: the sync time is only saved together with the rows it covers
         with sqlite3.connect(db_file) as conn:
-            conn.executemany("INSERT OR IGNORE INTO price_history VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            conn.executemany(
+                "INSERT OR IGNORE INTO price_history VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
             conn.execute(
                 """
                 INSERT INTO price_history_sync (game_id, country_code, last_synced_at) VALUES (?, ?, ?)
