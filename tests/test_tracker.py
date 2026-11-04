@@ -1,8 +1,10 @@
 import json
 import sqlite3
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 import steam_price_db_init
 import tracker
@@ -188,22 +190,193 @@ def test_model_errors_become_llm_unavailable(monkeypatch):
         list(tracker.chat_turn([{"role": "user", "content": "hi"}], "US"))
 
 
-def test_current_price_needs_the_game_in_the_catalog(db_file):
-    result = tracker.current_price("unknown", "US")
-    assert result["status"] == "error"
-    assert result["id"] == "unknown"
-
-
-def test_current_price_uses_the_cached_price(db_file):
+def add_to_catalog(db_file, *games):
     with sqlite3.connect(db_file) as conn:
-        conn.execute("INSERT INTO game_catalog (id, official_title, normalized_title, created_at) VALUES (?, ?, ?, ?)",
-                     ("hades", "Hades", "hades", "2026-10-01T00:00:00"))
-        conn.execute("INSERT INTO game_library VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))",
-                     ("hades", "Hades", "US", json.dumps({"price": {"amount": 12.49}}),
-                      json.dumps({"price": {"amount": 9.99}})))
-    result = tracker.current_price("hades", "US")
-    assert result == {"status": "match", "id": "hades", "title": "Hades", "current_deal": {"price": {"amount": 12.49}},
-                      "historical_lowest": {"price": {"amount": 9.99}}, "cached": True}
+        conn.executemany("INSERT INTO game_catalog (id, official_title, normalized_title, created_at) VALUES (?, ?, ?, ?)",
+                         [(game_id, title, title.lower(), "2026-10-01T00:00:00") for game_id, title in games])
+
+
+def overview(game_id, amount=12.49, lowest=9.99):
+    return {"id": game_id, "current": {"price": {"amount": amount}},
+            "lowest": {"price": {"amount": lowest}} if lowest else None, "bundled": 0, "urls": {}}
+
+
+class FakeOverview:
+    """Stands in for requests.post to /games/overview/v2."""
+
+    def __init__(self, *entries, error=None):
+        self.entries = entries
+        self.error = error
+        self.calls = []
+
+    def __call__(self, url, headers, params, json, timeout):
+        self.calls.append({"url": url, "params": params, "ids": json})
+        if self.error:
+            raise self.error
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"prices": list(self.entries), "bundles": []})
+
+
+@pytest.fixture
+def itad(monkeypatch):
+    monkeypatch.setenv("ITAD_API_KEY", "key")
+
+    def install(*entries, error=None):
+        fake = FakeOverview(*entries, error=error)
+        monkeypatch.setattr(tracker.requests, "post", fake)
+        return fake
+    return install
+
+
+def test_current_prices_makes_one_call_and_matches_results_by_id(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"), ("b", "Game B"), ("c", "Game C"))
+    # ITAD returns its own order and leaves out games with no Steam price
+    fake = itad(overview("c", amount=3, lowest=None), overview("a", amount=1))
+
+    results = tracker.current_prices(["a", "b", "c"], "GB")
+
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["ids"] == ["a", "b", "c"]
+    assert fake.calls[0]["params"] == {"country": "GB", "shops": tracker.STEAM_SHOP_ID}
+    assert [(r["id"], r["status"]) for r in results] == [("a", "match"), ("b", "no_price"), ("c", "match")]
+    assert results[0]["current_deal"] == {"price": {"amount": 1}}
+    assert results[0]["title"] == "Game A"
+    assert results[0]["cached"] is False
+    assert results[1] == {"status": "no_price", "id": "b", "title": "Game B"}
+    assert results[2]["historical_lowest"] is None
+
+
+def test_current_prices_only_fetches_what_isnt_cached(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"), ("b", "Game B"))
+    itad(overview("a"))
+    tracker.current_prices(["a"], "US")
+
+    fake = itad(overview("b"))
+    results = tracker.current_prices(["a", "b"], "US")
+
+    assert fake.calls[0]["ids"] == ["b"]
+    assert [r["cached"] for r in results] == [True, False]
+    assert results[0]["current_deal"] == {"price": {"amount": 12.49}}
+
+
+def test_cache_is_per_country_and_expires(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"))
+    itad(overview("a"))
+    tracker.current_prices(["a"], "US")
+
+    fake = itad(overview("a"))
+    assert tracker.current_prices(["a"], "JP")[0]["cached"] is False
+    assert len(fake.calls) == 1
+
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("UPDATE game_library SET last_search_date = ?",
+                     ((datetime.now() - timedelta(hours=25)).isoformat(),))
+    assert tracker.current_prices(["a"], "US")[0]["cached"] is False
+    assert len(fake.calls) == 2
+
+
+def age_cached_prices(db_file, hours):
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("UPDATE game_library SET last_search_date = ?",
+                     ((datetime.now() - timedelta(hours=hours)).isoformat(),))
+
+
+def test_max_age_refetches_older_prices_and_refreshes_the_cache(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"))
+    itad(overview("a", amount=20))
+    tracker.current_prices(["a"], "US")
+    age_cached_prices(db_file, 7)
+
+    # Still fresh enough for the default, so chat wouldn't call the API
+    fake = itad(overview("a", amount=5))
+    assert tracker.current_prices(["a"], "US")[0]["cached"] is True
+    assert tracker.current_prices(["a"], "US", timedelta(hours=8))[0]["cached"] is True
+    assert fake.calls == []
+
+    fresh = tracker.current_prices(["a"], "US", timedelta(hours=6))[0]
+    assert fresh["cached"] is False
+    assert fresh["current_deal"] == {"price": {"amount": 5}}
+    assert len(fake.calls) == 1
+    # The fetched price is what later lookups get
+    assert tracker.current_prices(["a"], "US")[0]["current_deal"] == {"price": {"amount": 5}}
+
+
+def test_max_age_only_refetches_the_prices_that_are_too_old(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"), ("b", "Game B"))
+    itad(overview("a"))
+    tracker.current_prices(["a"], "US")
+    age_cached_prices(db_file, 7)
+    itad(overview("b"))
+    tracker.current_prices(["b"], "US")
+
+    fake = itad(overview("a"))
+    results = tracker.current_prices(["a", "b"], "US", timedelta(hours=6))
+
+    assert fake.calls[0]["ids"] == ["a"]
+    assert [r["cached"] for r in results] == [False, True]
+
+
+def test_max_age_zero_fetches_every_price(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"))
+    itad(overview("a"))
+    tracker.current_prices(["a"], "US")
+    fake = itad(overview("a"))
+    assert tracker.current_prices(["a"], "US", timedelta(0))[0]["cached"] is False
+    assert len(fake.calls) == 1
+
+
+def test_outage_reports_an_error_rather_than_a_price_older_than_max_age(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"))
+    itad(overview("a"))
+    tracker.current_prices(["a"], "US")
+    age_cached_prices(db_file, 7)
+
+    itad(error=requests.ConnectionError("down"))
+
+    assert tracker.current_prices(["a"], "US", timedelta(hours=6))[0]["status"] == "error"
+    assert tracker.current_prices(["a"], "US")[0]["status"] == "match"
+
+
+def test_no_price_isnt_cached(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"))
+    itad()
+    assert tracker.current_prices(["a"], "US")[0]["status"] == "no_price"
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("SELECT count(*) FROM game_library").fetchone() == (0,)
+
+
+def test_current_prices_keeps_request_order_with_unknown_ids(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"))
+    fake = itad(overview("a"))
+    results = tracker.current_prices(["unknown", "a"], "US")
+    assert results[0] == {"status": "not_in_catalog", "id": "unknown"}
+    assert results[1]["status"] == "match"
+    assert fake.calls[0]["ids"] == ["a"]  # ITAD isn't asked about games we can't name
+
+
+def test_only_unknown_ids_make_no_call(db_file, itad):
+    fake = itad()
+    assert tracker.current_prices(["unknown"], "US") == [{"status": "not_in_catalog", "id": "unknown"}]
+    assert fake.calls == []
+
+
+def test_outage_still_returns_cached_prices(db_file, itad):
+    add_to_catalog(db_file, ("a", "Game A"), ("b", "Game B"))
+    itad(overview("a"))
+    tracker.current_prices(["a"], "US")
+
+    itad(error=requests.ConnectionError("down"))
+    results = tracker.current_prices(["a", "b"], "US")
+
+    assert results[0]["status"] == "match"
+    assert results[1]["status"] == "error"
+    assert results[1]["id"] == "b"
+    assert "down" in results[1]["error"]
+
+
+def test_price_response_reports_no_price_to_the_model(db_file, itad):
+    itad()
+    assert json.loads(tracker.price_response("a", "Game A", "US")) == {"status": "no_price", "id": "a", "title": "Game A"}
+    assert '"no_price"' in tracker.SYSTEM_PROMPT
 
 
 def test_itad_key_accepts_both_names(monkeypatch):

@@ -11,10 +11,11 @@ import json
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Annotated, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -119,6 +120,89 @@ class SelectResponse(BaseModel):
 class PricesRequest(BaseModel):
     game_ids: list[str] = Field(min_length=1, max_length=MAX_PRICE_IDS)
     country: Country = "US"
+    max_age_hours: float = Field(default=24, ge=0, le=24,
+                                 description="How old a cached price can be. Older prices are fetched again. "
+                                             "0 fetches every price.")
+
+
+class Money(BaseModel):
+    amount: float
+    amountInt: int = Field(description="The amount in the currency's smallest unit, such as cents.")
+    currency: str
+
+
+class Shop(BaseModel):
+    id: int
+    name: str
+
+
+class Deal(BaseModel):
+    shop: Shop
+    price: Money
+    regular: Money
+    cut: int = Field(description="The discount, in percent.")
+    timestamp: str | None = None
+    expiry: str | None = Field(default=None, description="When the deal ends, if known. Only on a current deal.")
+    url: str | None = Field(default=None, description="Where to buy. Only on a current deal.")
+
+
+class PriceMatch(BaseModel):
+    status: Literal["match"]
+    id: str
+    title: str
+    current_deal: Deal | None
+    historical_lowest: Deal | None = Field(description="The all-time low on Steam. IsThereAnyDeal has none for "
+                                                       "some games.")
+    cached: bool
+
+
+class NoPrice(BaseModel):
+    """The game exists but has no Steam price, so asking again won't help."""
+    status: Literal["no_price"]
+    id: str
+    title: str
+
+
+class SearchChoices(BaseModel):
+    """Several games match. With source "catalog" the list only covers games stored so far, so also offer to
+    search again with search_online=true."""
+    status: Literal["choices"]
+    choices: list[Game]
+    source: Literal["catalog", "api"]
+    query: str
+
+
+class SearchNotFound(BaseModel):
+    status: Literal["not_found"]
+    query: str
+
+
+SearchResult = Annotated[PriceMatch | NoPrice | SearchChoices | SearchNotFound, Field(discriminator="status")]
+
+
+class NotInCatalog(BaseModel):
+    """The game was never found through /games/search, so this service doesn't know it."""
+    status: Literal["not_in_catalog"]
+    id: str
+
+
+class PriceError(BaseModel):
+    """The lookup failed, so it's worth trying this game again later."""
+    status: Literal["error"]
+    id: str
+    title: str
+    error: str
+
+
+PriceResult = Annotated[PriceMatch | NoPrice | NotInCatalog | PriceError, Field(discriminator="status")]
+
+
+class PricesResponse(BaseModel):
+    prices: list[PriceResult] = Field(description="One result per requested id, in the same order.")
+
+
+class Health(BaseModel):
+    status: Literal["ok"]
 
 
 @app.exception_handler(tracker.LLMUnavailable)
@@ -163,8 +247,9 @@ def streaming(events: Iterator[dict], done: Callable[[dict], dict]) -> Streaming
 
 # Plain `def` endpoints: the agent blocks on the model and the APIs, so FastAPI runs them in its thread pool
 
-@app.get("/health")
+@app.get("/health", response_model=Health)
 def health() -> dict:
+    """Liveness only: the service is up. It doesn't check Ollama or IsThereAnyDeal."""
     return {"status": "ok"}
 
 
@@ -204,16 +289,19 @@ def select_stream(request: SelectRequest):
     return streaming(events, lambda reply: {"user_message": user_message, "reply": reply})
 
 
-@app.get("/games/search")
+@app.get("/games/search", response_model=SearchResult, responses={502: {"description": "IsThereAnyDeal failed."}})
 def search_games(query: Annotated[str, Query(min_length=1)], country: Country = "US",
                  search_online: bool = False) -> dict:
-    """Finds a game by title, without the model. "status" is "match" (with its price), "choices",
-    "not_found" or "error", as from the agent's search_game tool."""
-    return json.loads(tracker.search_game(query, country, search_online))
+    """Finds a game by title, without the model."""
+    result = json.loads(tracker.search_game(query, country, search_online))
+    if result["status"] == "error":
+        raise HTTPException(status_code=502, detail=result["error"])
+    return result
 
 
-@app.post("/prices")
+@app.post("/prices", response_model=PricesResponse)
 def prices(request: PricesRequest) -> dict:
-    """Current Steam prices for games already found through a search, for the price-alert job.
-    Each entry has "status" "match" or "error". Prices are cached for 24 hours."""
-    return {"prices": [tracker.current_price(game_id, request.country) for game_id in request.game_ids]}
+    """Current Steam prices for games already found through /games/search, for the price-alert job. Failures are
+    per game, so an IsThereAnyDeal outage still returns the prices newer than max_age_hours."""
+    max_age = timedelta(hours=request.max_age_hours)
+    return {"prices": tracker.current_prices(request.game_ids, request.country, max_age)}
