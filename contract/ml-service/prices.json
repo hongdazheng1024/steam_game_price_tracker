@@ -1,0 +1,46 @@
+{
+  "prices": [
+    {
+      "status": "match",
+      "id": "018d937f-00cb-710a-9a4c-f7c1c558b97d",
+      "title": "Prey",
+      "current_deal": {
+        "shop": {
+          "id": 61,
+          "name": "Steam"
+        },
+        "price": {
+          "amount": 5.99,
+          "amountInt": 599,
+          "currency": "USD"
+        },
+        "regular": {
+          "amount": 29.99,
+          "amountInt": 2999,
+          "currency": "USD"
+        },
+        "cut": 80,
+        "timestamp": "2026-10-08T19:55:25+02:00",
+        "expiry": null,
+        "url": "https://itad.link/018d9386-712c-707d-bd4d-e2329c84b026/"
+      },
+      "historical_lowest": null,
+      "cached": true
+    },
+    {
+      "status": "no_price",
+      "id": "018d937f-1111-7000-8000-000000000001",
+      "title": "Prey (2006)"
+    },
+    {
+      "status": "error",
+      "id": "018d937f-2222-7000-8000-000000000002",
+      "title": "Prey: Mooncrash",
+      "error": "Overview route failed: timeout"
+    },
+    {
+      "status": "not_in_catalog",
+      "id": "never-searched"
+    }
+  ]
+}
