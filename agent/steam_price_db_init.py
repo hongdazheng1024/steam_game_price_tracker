@@ -3,7 +3,8 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
-DB_FILE = "steam_tracker.db"
+# Next to this file, so the database is the same whichever directory the scripts or the service run from
+DB_FILE = str(Path(__file__).parent / "steam_tracker.db")
 CONFIG_PATH = Path(__file__).parent / "db_config.toml"
 
 

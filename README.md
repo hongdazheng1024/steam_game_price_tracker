@@ -31,8 +31,8 @@ The vector library gives the LLM context a price history can't: a game's genre, 
 | Price data from IsThereAnyDeal (cached in SQLite)                | Done    |
 | Price-tracking agent (Llama 3.1 tool calling, Gradio chat UI)    | Done    |
 | Buy-or-wait recommendations                                      | Done    |
-| Target-price prediction (price history + RAG context)            | In progress |
-| Python ML service (RAG + Llama 3.1) exposed over HTTP            | Planned |
+| Target-price prediction (price history + RAG context)            | Done    |
+| Python ML service (RAG + Llama 3.1) exposed over HTTP            | Done    |
 | Spring Boot backend (users, preferences, track list, price jobs) | Planned |
 | Next.js chat frontend                                            | Planned |
 
@@ -157,11 +157,11 @@ The price-tracking agent calls it through its `find_game_candidates` tool (see [
 
 ## Price-tracking agent
 
-[agent/steam_price_tracker.ipynb](agent/steam_price_tracker.ipynb) is a chat assistant for Steam game prices. Ask about a game and Llama 3.1 finds it on IsThereAnyDeal, then compares the current deal with the regular price and the all-time low and says whether to buy now or wait.
+[agent/tracker.py](agent/tracker.py) is a chat assistant for Steam game prices, served over HTTP by [agent/api.py](agent/api.py) (see [ML service API](#ml-service-api)) and in a local Gradio UI by [agent/gradio_app.py](agent/gradio_app.py). Ask about a game and Llama 3.1 finds it on IsThereAnyDeal, then compares the current deal with the regular price and the all-time low and says whether to buy now or wait.
 
 - The model has two tools: `search_game` when you name a game (even a partial or misspelled title), and `find_game_candidates` when you describe one without naming it, by publisher, genre, plot or "the new X game". The system prompt has examples of each.
 - Greetings and general questions are meant to get a normal reply, but Llama 3.1 8B often calls `search_game` with an empty or made-up title anyway.
-- The country (US, JP, GB, CA, AU, DE, FR) is picked in the UI.
+- The country (US, JP, GB, CA, AU, DE, FR) comes with each request (in the Gradio UI, from a dropdown).
 - Both lookups are cached in a local SQLite database (`agent/steam_tracker.db`, git-ignored), so repeat questions make fewer API calls, or none.
 
 ### Finding the game
@@ -233,29 +233,29 @@ A target price that's missing or not a number (the model sometimes sends `0`) ma
 
 1. Get an API key from [IsThereAnyDeal](https://isthereanydeal.com/apps/my/).
 2. Make sure Ollama is running and `llama3.1` is pulled (see [Setup](#setup)).
-3. Add both keys to a `.env` file in the repo root. Ollama doesn't check the model key, but it must be set:
+3. Add the key to a `.env` file in the repo root (or set `ITAD_API_KEY` in the environment, for shells and containers that reject the hyphen):
 
    ```
    ITAD-API-KEY=your-isthereanydeal-key
-   MODEL_API_KEY=ollama
    ```
+
+   Optional settings: `LLM_BASE_URL` (default `http://localhost:11434/v1`, Ollama's OpenAI-compatible API), `LLM_MODEL` (default `llama3.1`) and `MODEL_API_KEY` (Ollama doesn't check it).
 
 4. Create the database (see [Database setup](#database-setup)).
 
 ### Database setup
 
-[agent/steam_price_db_init.py](agent/steam_price_db_init.py) creates the SQLite database `steam_tracker.db` (git-ignored) in the directory you run it from. Run it from `agent/`:
+[agent/steam_price_db_init.py](agent/steam_price_db_init.py) creates the SQLite database `agent/steam_tracker.db` (git-ignored), whichever directory you run it from. The ML service also runs it at start-up, so this is only needed for the Gradio UI or after changing `force_to_drop_tables`:
 
 ```bash
-cd agent
-uv run python steam_price_db_init.py
+uv run python agent/steam_price_db_init.py
 ```
 
 It creates six tables:
 
 | Table                | Contents                                                                                                                                                                                                                   |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `game_library`       | Cached Steam price data (current deal and all-time low) per game and country, with the time it was fetched.                                                                                                                 |
+| `game_library`       | Cached Steam price data (current deal and all-time low) per game and country, with the time it was fetched.                                                                                                                |
 | `game_catalog`       | IsThereAnyDeal game ids with their official titles, plus a normalized title (lowercase, no punctuation) for matching. Filled from search results. Games found from a description also have their `steam_appid`.            |
 | `price_history`      | Steam price changes per game and country from IsThereAnyDeal's `/games/history/v2`: timestamp (UTC), price, regular price, discount and currency. Each price holds until the next row.                                     |
 | `price_history_sync` | When each game's history was last fetched, per country. A row with no `price_history` rows means the game has no Steam price history.                                                                                      |
@@ -327,13 +327,52 @@ The older notebook [agent/steam_price_db_init.ipynb](agent/steam_price_db_init.i
 
 ### Running
 
-Open [agent/steam_price_tracker.ipynb](agent/steam_price_tracker.ipynb) with the project's `.venv` as the kernel (for example in VS Code), or start Jupyter with:
+The local Gradio chat UI, at http://127.0.0.1:7860 by default:
 
 ```bash
-uv run --with jupyter jupyter lab
+uv run python agent/gradio_app.py
 ```
 
-Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860 by default.
+## ML service API
+
+[agent/api.py](agent/api.py) serves the agent over HTTP for the Spring Boot backend. Start it from the repo root:
+
+```bash
+uv run uvicorn api:app --app-dir agent --port 8000
+```
+
+Start-up checks the IsThereAnyDeal key, creates any missing database tables and loads the embedding model and vector store, so it takes a few seconds. Interactive docs (OpenAPI) are at http://localhost:8000/docs.
+
+The service keeps no user state. The backend sends the whole conversation (`{"role": "user" | "assistant", "content"}` messages, oldest first) and the user's country with every chat request, and stores the replies itself.
+
+| Endpoint                   | Purpose                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /chat`               | The reply to the user's new message, which must be the last message.                                                                             |
+| `POST /chat/stream`        | The same, as server-sent events: `delta` events with `{"text"}` as the reply is written, then `done` with the `/chat` body (or `error`).         |
+| `POST /chat/select`        | The reply when the user picks one of a reply's choices. Returns the `user_message` the pick stands for, to store in the conversation.            |
+| `POST /chat/select/stream` | The same, as server-sent events.                                                                                                                 |
+| `GET /games/search`        | Finds a game by title without the model (`query`, `country`, `search_online`). Returns a match with its price, choices, `not_found` or an error. |
+| `POST /prices`             | Current Steam prices for up to 100 game ids already in the catalog, for the price-alert job. Prices are cached for 24 hours.                     |
+| `GET /health`              | Liveness check.                                                                                                                                  |
+
+A reply is:
+
+```json
+{
+  "content": "Markdown message",
+  "game": { "id": "itad-game-id", "title": "Hades" },
+  "choices": {
+    "source": "catalog",
+    "query": "prey",
+    "games": [{ "id": "...", "title": "Prey" }]
+  }
+}
+```
+
+- `game` is the game the reply is about (a price or a prediction), so the frontend can offer to track it. Otherwise `null`.
+- `choices` lists games to show as buttons under the message. Otherwise `null`. Send the pick to `/chat/select` as `{"type": "game", "id", "title"}`. With source `catalog`, also offer "None of these, search online" (`{"type": "search_online", "query"}`), and with `rag`, "None of these" (`{"type": "none_of_these"}`).
+- Predictions and choices arrive as a single `delta`, since they're checked or built as a whole. Price summaries stream token by token.
+- A model that can't be reached gets a `503`. Bad requests (an unknown country, a conversation that doesn't end with a user message) get a `422`.
 
 ## Tests
 
@@ -341,7 +380,7 @@ Run all cells. The last cell starts the Gradio chat UI, at http://127.0.0.1:7860
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, the comparable-game ranking (with the API mocked out), the seasonal sale calendar, and the target-price prediction. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, the comparable-game ranking (with the API mocked out), the seasonal sale calendar, the target-price prediction, the agent's turns (with the model and APIs faked) and the HTTP API's requests, responses and streaming. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
 
 ## Project layout
 
@@ -354,7 +393,9 @@ kb_builder/
 ├── common.py       paths, throttled HTTP client, helpers
 └── data/genre_tags.json
 agent/
-├── steam_price_tracker.ipynb   price tool, Llama 3.1 agent and Gradio chat UI
+├── tracker.py                  price tools and the Llama 3.1 agent, one stateless turn at a time
+├── api.py                      FastAPI service over the agent, for the Spring Boot backend
+├── gradio_app.py               local Gradio chat UI over the agent
 ├── steam_price_db_init.py      creates the SQLite price cache, game catalog and price history tables
 ├── price_history.py            Steam price history from IsThereAnyDeal, cached in SQLite
 ├── game_info.py                game details (release date, companies, reviews, players) from IsThereAnyDeal, cached in SQLite
