@@ -1,0 +1,46 @@
+{
+  "status": "match",
+  "id": "018d937f-00cb-710a-9a4c-f7c1c558b97d",
+  "title": "Prey",
+  "current_deal": {
+    "shop": {
+      "id": 61,
+      "name": "Steam"
+    },
+    "price": {
+      "amount": 5.99,
+      "amountInt": 599,
+      "currency": "USD"
+    },
+    "regular": {
+      "amount": 29.99,
+      "amountInt": 2999,
+      "currency": "USD"
+    },
+    "cut": 80,
+    "timestamp": "2026-10-08T19:55:25+02:00",
+    "expiry": null,
+    "url": "https://itad.link/018d9386-712c-707d-bd4d-e2329c84b026/"
+  },
+  "historical_lowest": {
+    "shop": {
+      "id": 61,
+      "name": "Steam"
+    },
+    "price": {
+      "amount": 2.99,
+      "amountInt": 299,
+      "currency": "USD"
+    },
+    "regular": {
+      "amount": 29.99,
+      "amountInt": 2999,
+      "currency": "USD"
+    },
+    "cut": 90,
+    "timestamp": "2025-06-26T19:00:00+02:00",
+    "expiry": null,
+    "url": null
+  },
+  "cached": false
+}

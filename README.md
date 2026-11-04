@@ -33,6 +33,7 @@ The vector library gives the LLM context a price history can't: a game's genre, 
 | Buy-or-wait recommendations                                      | Done    |
 | Target-price prediction (price history + RAG context)            | Done    |
 | Python ML service (RAG + Llama 3.1) exposed over HTTP            | Done    |
+| Spring Boot backend: game search                                 | Done    |
 | Spring Boot backend (users, preferences, track list, price jobs) | Planned |
 | Next.js chat frontend                                            | Planned |
 
@@ -345,15 +346,15 @@ Start-up checks the IsThereAnyDeal key, creates any missing database tables and 
 
 The service keeps no user state. The backend sends the whole conversation (`{"role": "user" | "assistant", "content"}` messages, oldest first) and the user's country with every chat request, and stores the replies itself.
 
-| Endpoint                   | Purpose                                                                                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /chat`               | The reply to the user's new message, which must be the last message.                                                                             |
-| `POST /chat/stream`        | The same, as server-sent events: `delta` events with `{"text"}` as the reply is written, then `done` with the `/chat` body (or `error`).         |
-| `POST /chat/select`        | The reply when the user picks one of a reply's choices. Returns the `user_message` the pick stands for, to store in the conversation.            |
-| `POST /chat/select/stream` | The same, as server-sent events.                                                                                                                 |
-| `GET /games/search`        | Finds a game by title without the model (`query`, `country`, `search_online`). See [Search and prices](#search-and-prices).                 |
-| `POST /prices`             | Current Steam prices for up to 100 games, for the price-alert job. See [Search and prices](#search-and-prices).                             |
-| `GET /health`              | Liveness only: the service is up. It doesn't check Ollama or IsThereAnyDeal.                                                                |
+| Endpoint                   | Purpose                                                                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /chat`               | The reply to the user's new message, which must be the last message.                                                                     |
+| `POST /chat/stream`        | The same, as server-sent events: `delta` events with `{"text"}` as the reply is written, then `done` with the `/chat` body (or `error`). |
+| `POST /chat/select`        | The reply when the user picks one of a reply's choices. Returns the `user_message` the pick stands for, to store in the conversation.    |
+| `POST /chat/select/stream` | The same, as server-sent events.                                                                                                         |
+| `GET /games/search`        | Finds a game by title without the model (`query`, `country`, `search_online`). See [Search and prices](#search-and-prices).              |
+| `POST /prices`             | Current Steam prices for up to 100 games, for the price-alert job. See [Search and prices](#search-and-prices).                          |
+| `GET /health`              | Liveness only: the service is up. It doesn't check Ollama or IsThereAnyDeal.                                                             |
 
 A reply is:
 
@@ -378,19 +379,84 @@ A reply is:
 
 These two endpoints use IsThereAnyDeal and the local cache, not the model, so they keep working when Ollama is down. Their response schemas are in the OpenAPI document at `/openapi.json`, for generating the backend's client. Both results are tagged by `status`.
 
-| `status`         | From              | Meaning                                                                                                     |
-| ---------------- | ----------------- | ----------------------------------------------------------------------------------------------------------- |
-| `match`          | search and prices | The game's `id`, `title`, `current_deal`, `historical_lowest` (`null` for some games) and `cached`.         |
-| `no_price`       | search and prices | The game exists but has no Steam price. Asking again won't help.                                            |
-| `choices`        | search            | Several games match. With `source` `catalog`, also offer to search again with `search_online=true`.         |
-| `not_found`      | search            | No game matches the query.                                                                                  |
-| `not_in_catalog` | prices            | The id was never returned by a search, so the service doesn't know the game.                                |
-| `error`          | prices            | The lookup failed for this game. Worth trying again later.                                                  |
+| `status`         | From              | Meaning                                                                                             |
+| ---------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
+| `match`          | search and prices | The game's `id`, `title`, `current_deal`, `historical_lowest` (`null` for some games) and `cached`. |
+| `no_price`       | search and prices | The game exists but has no Steam price. Asking again won't help.                                    |
+| `choices`        | search            | Several games match. With `source` `catalog`, also offer to search again with `search_online=true`. |
+| `not_found`      | search            | No game matches the query.                                                                          |
+| `not_in_catalog` | prices            | The id was never returned by a search, so the service doesn't know the game.                        |
+| `error`          | prices            | The lookup failed for this game. Worth trying again later.                                          |
 
 - If IsThereAnyDeal fails during a search, `/games/search` returns a `502`.
 - `/prices` always returns one result per id, in request order. Failures are per game, so an outage still returns the prices newer than `max_age_hours`. An older one comes back as `error`, not as a stale price.
 - `/prices` makes at most one IsThereAnyDeal request, however many games are in it. Only games without a fresh cached price are fetched.
 - Prices are cached for 24 hours per game and country, so by default a discount can show up to 24 hours late. `/prices` takes an optional `max_age_hours` (0 to 24, default 24) for how old a cached price can be: the alert job can pass `6` to see discounts within 6 hours, or `0` to fetch every price. A fetched price also refreshes the cache that chat and search read.
+
+## Backend
+
+[backend/](backend) is the Spring Boot service the frontend talks to (Spring Boot 4, Java 21). So far it has game search, which needs no database or login.
+
+Start the ML service first (see [ML service API](#ml-service-api)), then from `backend/`:
+
+```bash
+./mvnw spring-boot:run
+```
+
+It listens on port 8080 and finds the ML service at `ML_SERVICE_URL` (default `http://localhost:8000`). Java 21 must be what `java` runs, or be set in `JAVA_HOME`.
+
+### Game search
+
+```
+GET /api/v1/games/search?query=prey&country=US&searchOnline=false
+```
+
+| Parameter      | Required | Description                                                                                               |
+| -------------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| `query`        | Yes      | The title, up to 100 characters.                                                                          |
+| `country`      | No       | `US`, `JP`, `GB`, `CA`, `AU`, `DE` or `FR`. Defaults to `US`.                                             |
+| `searchOnline` | No       | `true` searches IsThereAnyDeal instead of the local catalog, which spends API quota. Defaults to `false`. |
+
+However many games match, the response has the same shape:
+
+```json
+{
+  "query": "prey",
+  "canSearchOnline": true,
+  "results": [
+    {
+      "id": "018d937f-00cb-710a-9a4c-f7c1c558b97d",
+      "title": "Prey",
+      "priceStatus": "AVAILABLE",
+      "price": {
+        "currency": "USD",
+        "current": 5.99,
+        "regular": 29.99,
+        "discountPercent": 80,
+        "historicalLow": 2.99,
+        "url": "https://itad.link/..."
+      }
+    }
+  ]
+}
+```
+
+- `results` is empty when nothing matches.
+- `priceStatus` is `AVAILABLE`, `NOT_ON_STEAM` (asking again won't help) or `UNAVAILABLE` (the lookup failed, so try again later). `price` is `null` unless it's `AVAILABLE`, and `historicalLow` can be `null` on its own.
+- `canSearchOnline` says whether to offer a search with `searchOnline=true`. It's true unless that search has already happened, including for a single match, since the catalog can miss other games with the same title.
+- When several games match, their prices come from one extra call to the ML service. If it fails, the games are still returned as `UNAVAILABLE`.
+
+Errors are [problem details](https://www.rfc-editor.org/rfc/rfc9457) (`application/problem+json`):
+
+| Status | Meaning                                                                    |
+| ------ | -------------------------------------------------------------------------- |
+| `400`  | A blank or too long `query`, an unknown `country` or a bad `searchOnline`. |
+| `502`  | IsThereAnyDeal failed, or the ML service's response couldn't be read.      |
+| `503`  | The ML service can't be reached, timed out or is failing.                  |
+
+Only `/actuator/health` is exposed from the actuator. Before this goes public it needs a login or a rate limit, since `searchOnline=true` always spends IsThereAnyDeal quota.
+
+The backend's view of the ML service is in [MlModels.java](backend/src/main/java/com/steamtracker/backend/ml/MlModels.java). [contract/ml-service](contract/ml-service) holds sample responses that the tests of both sides check, so a change on one side fails CI until the other is updated.
 
 ## Tests
 
@@ -398,7 +464,9 @@ These two endpoints use IsThereAnyDeal and the local cache, not the model, so th
 uv run pytest
 ```
 
-The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, the comparable-game ranking (with the API mocked out), the seasonal sale calendar, the target-price prediction, the agent's turns (with the model and APIs faked) and the HTTP API's requests, responses and streaming. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+The tests cover `slugify`, the HTTP retry/backoff logic (with the network and `time.sleep` mocked out), knowledge-base chunking (including game header metadata), the company matching and ranking behind `find_game_candidates`, the database init (including adding `steam_appid` to an existing `game_catalog`), the price history and game info caches, the comparable-game ranking (with the API mocked out), the seasonal sale calendar, the target-price prediction, the agent's turns (with the model and APIs faked) and the HTTP API's requests, responses and streaming, and the [contract](contract) samples against the API's response models. They need none of the ML stack, so [GitHub Actions](.github/workflows/tests.yml) runs them on every push and pull request with only the `dev` dependency group (`uv run --only-group dev pytest`).
+
+The backend has its own tests, run from `backend/` with `./mvnw test`, and [its own workflow](.github/workflows/backend.yml), which runs when `backend/` or `contract/` changes. They need no ML service: a fake one on a local port sends the contract's sample responses.
 
 ## Project layout
 
@@ -428,6 +496,8 @@ RAG/
 ├── candidates.py   company matching and ranking for find_game_candidates (no ML dependencies)
 ├── data_load.py    builds/opens the Chroma vector store and exposes retrieval and find_game_candidates
 └── db/             generated vector store (git-ignored)
+backend/            Spring Boot service for the frontend
+contract/           sample ML service responses, checked by the tests of both sides
 tests/              pytest suite
 .github/workflows/  CI that runs the tests on every push
 config.toml         batch job settings
