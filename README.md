@@ -351,9 +351,9 @@ The service keeps no user state. The backend sends the whole conversation (`{"ro
 | `POST /chat/stream`        | The same, as server-sent events: `delta` events with `{"text"}` as the reply is written, then `done` with the `/chat` body (or `error`).         |
 | `POST /chat/select`        | The reply when the user picks one of a reply's choices. Returns the `user_message` the pick stands for, to store in the conversation.            |
 | `POST /chat/select/stream` | The same, as server-sent events.                                                                                                                 |
-| `GET /games/search`        | Finds a game by title without the model (`query`, `country`, `search_online`). Returns a match with its price, choices, `not_found` or an error. |
-| `POST /prices`             | Current Steam prices for up to 100 game ids already in the catalog, for the price-alert job. Prices are cached for 24 hours.                     |
-| `GET /health`              | Liveness check.                                                                                                                                  |
+| `GET /games/search`        | Finds a game by title without the model (`query`, `country`, `search_online`). See [Search and prices](#search-and-prices).                 |
+| `POST /prices`             | Current Steam prices for up to 100 games, for the price-alert job. See [Search and prices](#search-and-prices).                             |
+| `GET /health`              | Liveness only: the service is up. It doesn't check Ollama or IsThereAnyDeal.                                                                |
 
 A reply is:
 
@@ -373,6 +373,24 @@ A reply is:
 - `choices` lists games to show as buttons under the message. Otherwise `null`. Send the pick to `/chat/select` as `{"type": "game", "id", "title"}`. With source `catalog`, also offer "None of these, search online" (`{"type": "search_online", "query"}`), and with `rag`, "None of these" (`{"type": "none_of_these"}`).
 - Predictions and choices arrive as a single `delta`, since they're checked or built as a whole. Price summaries stream token by token.
 - A model that can't be reached gets a `503`. Bad requests (an unknown country, a conversation that doesn't end with a user message) get a `422`.
+
+### Search and prices
+
+These two endpoints use IsThereAnyDeal and the local cache, not the model, so they keep working when Ollama is down. Their response schemas are in the OpenAPI document at `/openapi.json`, for generating the backend's client. Both results are tagged by `status`.
+
+| `status`         | From              | Meaning                                                                                                     |
+| ---------------- | ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| `match`          | search and prices | The game's `id`, `title`, `current_deal`, `historical_lowest` (`null` for some games) and `cached`.         |
+| `no_price`       | search and prices | The game exists but has no Steam price. Asking again won't help.                                            |
+| `choices`        | search            | Several games match. With `source` `catalog`, also offer to search again with `search_online=true`.         |
+| `not_found`      | search            | No game matches the query.                                                                                  |
+| `not_in_catalog` | prices            | The id was never returned by a search, so the service doesn't know the game.                                |
+| `error`          | prices            | The lookup failed for this game. Worth trying again later.                                                  |
+
+- If IsThereAnyDeal fails during a search, `/games/search` returns a `502`.
+- `/prices` always returns one result per id, in request order. Failures are per game, so an outage still returns the prices newer than `max_age_hours`. An older one comes back as `error`, not as a stale price.
+- `/prices` makes at most one IsThereAnyDeal request, however many games are in it. Only games without a fresh cached price are fetched.
+- Prices are cached for 24 hours per game and country, so by default a discount can show up to 24 hours late. `/prices` takes an optional `max_age_hours` (0 to 24, default 24) for how old a cached price can be: the alert job can pass `6` to see discounts within 6 hours, or `0` to fetch every price. A fetched price also refreshes the cache that chat and search read.
 
 ## Tests
 

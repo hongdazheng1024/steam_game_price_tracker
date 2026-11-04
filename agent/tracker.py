@@ -38,6 +38,8 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1")
 ITAD_URL = "https://api.isthereanydeal.com"
 ITAD_TIMEOUT = 30
+# How old a cached price can be, unless the caller asks for fresher
+PRICE_MAX_AGE = timedelta(hours=24)
 
 db_config = load_config()
 HISTORY_MAX_AGE = timedelta(hours=db_config["history_max_age_hours"])
@@ -108,6 +110,7 @@ EXAMPLES:
 HOW TO HANDLE THE TOOL RESULT (check its "status" field):
 - "match": the result has the game's price data. Summarize it as described below.
 - "choices": the request matched more than one game, or (with "source": "rag") the description may mean any of these games. Show the "title" of each choice as a numbered list and ask which one they mean. Do not pick one yourself. When the user answers, call 'search_game' again with the exact title they picked.
+- "no_price": the game was found but has no Steam price. Tell the user it doesn't seem to be sold on Steam.
 - "not_found": with "source": "rag", no game matched the description: ask the user for the exact game title and don't call any tool until they give one. Otherwise, tell the user no game matched and ask them to check the title.
 - "prediction": the result of 'predict_target_price'. Answer as described under HOW TO EXPLAIN A PREDICTION.
 - "missing_target_price": ask the user what price they'd like to pay for the game.
@@ -129,68 +132,91 @@ HOW TO INTEGRATE AND REASON WITH THE TOOL DATA:
 # =====================================================================
 # Prices and game lookup
 # =====================================================================
-def get_price_by_id(game_id: str, official_title: str, country: str) -> dict:
-    # -------------------------------------------------------------------------
-    # STEP 1: Check the Local Cache
-    # -------------------------------------------------------------------------
+def read_cached_price(game_id: str, country: str, max_age: timedelta) -> dict | None:
+    # The stored deal and all-time low, if they're newer than max_age
     with sqlite3.connect(DB_FILE) as conn:
         row = conn.execute(
             "SELECT current_deal, historical_lowest, last_search_date FROM game_library WHERE id = ? AND country_code = ?",
             (game_id, country)
         ).fetchone()
+    if not row:
+        return None
+    cached_current, cached_lowest, last_search_str = row
+    if datetime.now() - datetime.fromisoformat(last_search_str) >= max_age:
+        return None
+    return {"current_deal": json.loads(cached_current), "historical_lowest": json.loads(cached_lowest)}
 
-    if row:
-        cached_current, cached_lowest, last_search_str = row
-        # Check if the cache record is fresh (less than 24 hours old)
-        if datetime.now() - datetime.fromisoformat(last_search_str) < timedelta(hours=24):
-            log.info("cache hit for '%s' (%s)", official_title, country)
-            return {
-                "title": official_title,
-                "current_deal": json.loads(cached_current),
-                "historical_lowest": json.loads(cached_lowest),
-                "cached": True
-            }
+
+def fetch_overview(game_ids: list[str], country: str) -> dict:
+    # Returns {game_id: overview}. One request covers every id. The response isn't in request order, and
+    # leaves out games with no Steam price and ids ITAD doesn't know, so match on each entry's id.
+    # Steam only: without "shops", the current deal and the all-time low can come from any store
+    response = requests.post(f"{ITAD_URL}/games/overview/v2", headers={"ITAD-API-Key": itad_api_key()},
+                             params={"country": country, "shops": STEAM_SHOP_ID}, json=game_ids,
+                             timeout=ITAD_TIMEOUT)
+    response.raise_for_status()
+    return {entry["id"]: entry for entry in response.json().get("prices", [])}
+
+
+def lookup_prices(titles: dict[str, str], country: str, max_age: timedelta = PRICE_MAX_AGE) -> dict:
+    # titles: {game_id: official_title}. Returns {game_id: result}, where each result has "id", "title"
+    # and a "status":
+    #   "match"    -> "current_deal", "historical_lowest" (null if ITAD has none) and "cached"
+    #   "no_price" -> the game has no Steam price, so asking again won't help
+    #   "error"    -> {"error": "..."} the lookup failed, so it's worth trying again
+    # -------------------------------------------------------------------------
+    # STEP 1: Check the Local Cache
+    # -------------------------------------------------------------------------
+    results = {}
+    stale = []
+    for game_id, title in titles.items():
+        cached = read_cached_price(game_id, country, max_age)
+        if cached:
+            results[game_id] = {"status": "match", "id": game_id, "title": title, **cached, "cached": True}
+        else:
+            stale.append(game_id)
+    if not stale:
+        return results
 
     # -------------------------------------------------------------------------
     # STEP 2: Cache Miss or Stale Data -> Query the API
     # -------------------------------------------------------------------------
-    log.info("cache miss for '%s' (%s), calling /games/overview", official_title, country)
+    log.info("calling /games/overview for %d games (%s)", len(stale), country)
     try:
-        # Steam only: without "shops", the current deal and the all-time low can come from any store
-        overview_res = requests.post(f"{ITAD_URL}/games/overview/v2", headers={"ITAD-API-Key": itad_api_key()},
-                                     params={"country": country, "shops": STEAM_SHOP_ID}, json=[game_id],
-                                     timeout=ITAD_TIMEOUT)
-        overview_res.raise_for_status()
-        prices_list = overview_res.json().get("prices", [])
+        overviews = fetch_overview(stale, country)
     except requests.RequestException as e:
-        return {"error": f"Overview route failed: {str(e)}"}
-
-    if not prices_list:
-        return {"error": f"No pricing details available for {official_title}."}
-    current_deal = prices_list[0].get("current")
-    historical_lowest = prices_list[0].get("lowest")
+        log.warning("overview route failed: %s", e)
+        for game_id in stale:
+            results[game_id] = {"status": "error", "id": game_id, "title": titles[game_id],
+                                "error": f"Overview route failed: {str(e)}"}
+        return results
 
     # -------------------------------------------------------------------------
     # STEP 3: Insert or Update the Database
     # -------------------------------------------------------------------------
+    now_str = datetime.now().isoformat()
+    rows = []
+    for game_id in stale:
+        overview = overviews.get(game_id)
+        if overview is None:
+            results[game_id] = {"status": "no_price", "id": game_id, "title": titles[game_id]}
+            continue
+        results[game_id] = {"status": "match", "id": game_id, "title": titles[game_id],
+                            "current_deal": overview.get("current"), "historical_lowest": overview.get("lowest"),
+                            "cached": False}
+        rows.append((game_id, titles[game_id], country, json.dumps(overview.get("current")),
+                     json.dumps(overview.get("lowest")), now_str))
     with sqlite3.connect(DB_FILE) as conn:
-        conn.execute("""
+        conn.executemany("""
             INSERT INTO game_library (id, title, country_code, current_deal, historical_lowest, last_search_date)
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id, country_code) DO UPDATE SET
                 current_deal = excluded.current_deal,
                 historical_lowest = excluded.historical_lowest,
                 last_search_date = excluded.last_search_date;
-        """, (game_id, official_title, country, json.dumps(current_deal), json.dumps(historical_lowest),
-              datetime.now().isoformat()))
+        """, rows)
         conn.commit()
-
-    return {
-        "title": official_title,
-        "current_deal": current_deal,
-        "historical_lowest": historical_lowest,
-        "cached": False
-    }
+    return results
 
 
 def normalize_title(title: str) -> str:
@@ -202,7 +228,8 @@ def normalize_title(title: str) -> str:
 MAX_CHOICES = 10
 
 # Every lookup below returns JSON with a "status" field:
-#   "match"     -> price data for one game ({"id"} plus the fields of get_price_by_id)
+#   "match"     -> price data for one game (see lookup_prices)
+#   "no_price"  -> one game, with no Steam price ({"id", "title"})
 #   "choices"   -> {"choices": [{"id", "title"}, ...], "source": "catalog" | "api" | "rag", "query"} for the user to pick from.
 #                  With source "catalog" the list only covers games stored so far, so the UI should offer
 #                  "None of these", which calls search_game again with search_online=True.
@@ -211,9 +238,7 @@ MAX_CHOICES = 10
 #   "error"     -> {"error": "..."}
 
 def price_response(game_id: str, official_title: str, country: str) -> str:
-    result = get_price_by_id(game_id, official_title, country)
-    status = "error" if "error" in result else "match"
-    return json.dumps({"status": status, "id": game_id, **result})
+    return json.dumps(lookup_prices({game_id: official_title}, country)[game_id])
 
 
 def choices_response(rows, source: str, query: str) -> str:
@@ -225,14 +250,16 @@ def choices_response(rows, source: str, query: str) -> str:
     })
 
 
-def current_price(game_id: str, country: str) -> dict:
-    # For callers that already know the game id, like the backend's price-alert job.
-    # The title comes from game_catalog, so the game must have been found through a search before.
+def current_prices(game_ids: list[str], country: str, max_age: timedelta = PRICE_MAX_AGE) -> list[dict]:
+    # For callers that already know the game ids, like the backend's price-alert job. One result per id, in
+    # the same order: lookup_prices' result, or {"status": "not_in_catalog", "id"} for a game that was never
+    # found through a search, since game_catalog holds the titles.
+    placeholders = ",".join("?" * len(game_ids))
     with sqlite3.connect(DB_FILE) as conn:
-        row = conn.execute("SELECT official_title FROM game_catalog WHERE id = ?", (game_id,)).fetchone()
-    if not row:
-        return {"status": "error", "id": game_id, "error": f"'{game_id}' is not in the game catalog. Search for it first."}
-    return json.loads(price_response(game_id, row[0], country))
+        titles = dict(conn.execute(f"SELECT id, official_title FROM game_catalog WHERE id IN ({placeholders})",
+                                   game_ids).fetchall())
+    prices = lookup_prices(titles, country, max_age) if titles else {}
+    return [prices.get(game_id, {"status": "not_in_catalog", "id": game_id}) for game_id in game_ids]
 
 
 def search_catalog(normalized_query: str) -> list:
